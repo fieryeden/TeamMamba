@@ -1,0 +1,499 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── AUTH & USERS ───────────────────────────────────────
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  passwordHash  String
+  firstName     String
+  lastName      String
+  avatarUrl     String?
+  role          UserRole  @default(MEMBER)
+  status        UserStatus @default(ACTIVE)
+  timezone      String    @default("America/Los_Angeles")
+  lastLoginAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  ownedWorkspaces Workspace[] @relation("WorkspaceOwner")
+  workspaceMemberships WorkspaceMember[]
+  boardMemberships BoardMember[]
+  assignedItems ItemAssignee[]
+  comments Comment[]
+  activities Activity[]
+  automations Automation[]
+  notifications Notification[]
+  updates       Update[]
+  apiTokens ApiToken[]
+
+  @@map("users")
+}
+
+model ApiToken {
+  id        String   @id @default(uuid())
+  userId    String
+  name      String
+  tokenHash String   @unique
+  lastUsed  DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("api_tokens")
+}
+
+enum UserRole {
+  ADMIN
+  MEMBER
+  VIEWER
+  GUEST
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+// ─── WORKSPACES & BOARDS ────────────────────────────────
+
+model Workspace {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  icon        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  ownerId String
+  owner   User   @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+
+  members WorkspaceMember[]
+  boards  Board[]
+
+  @@map("workspaces")
+}
+
+model WorkspaceMember {
+  id          String   @id @default(uuid())
+  workspaceId String
+  userId      String
+  role        WorkspaceRole @default(MEMBER)
+  joinedAt    DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@map("workspace_members")
+}
+
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+model Board {
+  id          String      @id @default(uuid())
+  workspaceId String
+  name        String
+  description String?
+  icon        String?
+  boardKind   BoardKind   @default(KANBAN)
+  color       String?
+  isTemplate  Boolean     @default(false)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  columns     BoardColumn[]
+  groups      Group[]
+  items       Item[]
+  members     BoardMember[]
+  automations Automation[]
+  views       BoardView[]
+  activities  Activity[]
+
+  @@map("boards")
+}
+
+enum BoardKind {
+  KANBAN
+  TABLE
+  TIMELINE
+  CALENDAR
+  FORM
+}
+
+model BoardMember {
+  id       String      @id @default(uuid())
+  boardId  String
+  userId   String
+  role     BoardRole   @default(MEMBER)
+
+  board Board @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([boardId, userId])
+  @@map("board_members")
+}
+
+enum BoardRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+// ─── COLUMNS ────────────────────────────────────────────
+
+model BoardColumn {
+  id         String       @id @default(uuid())
+  boardId    String
+  title      String
+  columnType ColumnType
+  config     Json?        // column-specific settings (labels, colors, options, etc.)
+  order      Int
+  width      Int?
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+
+  board Board @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  values ColumnValue[]
+
+  @@map("board_columns")
+}
+
+enum ColumnType {
+  TEXT
+  LONG_TEXT
+  NUMBER
+  STATUS
+  DATE
+  PEOPLE
+  TAGS
+  CHECKBOX
+  TIMELINE
+  LINK
+  FILE
+  FORMULA
+  PROGRESS
+  RATING
+  EMAIL
+  PHONE
+  AUTO_NUMBER
+  ITEM_ID
+  CREATION_LOG
+  LAST_UPDATE
+  COLOR
+  LOCATION
+  WORLD_CLOCK
+  HOUR
+  DEPENDENCY
+  VOTE
+  TIME_TRACKING
+  FORM_LINK
+}
+
+// ─── GROUPS & ITEMS ─────────────────────────────────────
+
+model Group {
+  id        String   @id @default(uuid())
+  boardId   String
+  name      String
+  color     String   @default("#579bfc")
+  position  Int
+  isCollapsed Boolean @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  board Board @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  items Item[]
+
+  @@map("groups")
+}
+
+model Item {
+  id        String   @id @default(uuid())
+  boardId   String
+  groupId   String
+  name      String
+  position  Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  board Board @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  columnValues ColumnValue[]
+  assignees    ItemAssignee[]
+  comments     Comment[]
+  activities   Activity[]
+  updates      Update[]
+  subitems     Subitem[]
+
+  // Dependencies
+  dependenciesFrom Dependency[] @relation("DependencyFrom")
+  dependenciesTo   Dependency[] @relation("DependencyTo")
+
+  @@map("items")
+}
+
+model Subitem {
+  id        String   @id @default(uuid())
+  parentId  String
+  name      String
+  position  Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  parent Item @relation(fields: [parentId], references: [id], onDelete: Cascade)
+
+  columnValues ColumnValue[]
+
+  @@map("subitems")
+}
+
+model ColumnValue {
+  id         String   @id @default(uuid())
+  itemId     String?
+  subitemId  String?
+  columnId   String
+  value      Json?    // stored as JSON to support all column types
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+ item Item? @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  subitem Subitem? @relation(fields: [subitemId], references: [id], onDelete: Cascade)
+  column  BoardColumn @relation(fields: [columnId], references: [id], onDelete: Cascade)
+
+  @@map("column_values")
+}
+
+model ItemAssignee {
+  id     String @id @default(uuid())
+  itemId String
+  userId String
+
+  item Item? @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([itemId, userId])
+  @@map("item_assignees")
+}
+
+// ─── DEPENDENCIES ───────────────────────────────────────
+
+model Dependency {
+  id           String           @id @default(uuid())
+  fromItemId   String
+  toItemId     String
+  dependencyType DependencyType @default(FINISH_TO_START)
+
+  fromItem Item @relation("DependencyFrom", fields: [fromItemId], references: [id], onDelete: Cascade)
+  toItem   Item @relation("DependencyTo", fields: [toItemId], references: [id], onDelete: Cascade)
+
+  @@map("dependencies")
+}
+
+enum DependencyType {
+  FINISH_TO_START
+  START_TO_START
+  FINISH_TO_FINISH
+  START_TO_FINISH
+}
+
+// ─── COMMENTS & UPDATES ─────────────────────────────────
+
+model Comment {
+  id        String   @id @default(uuid())
+  itemId    String
+  userId    String
+  body      String
+  parentId  String?  // for threaded replies
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  item     Item  @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  user     User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reactions CommentReaction[]
+
+  @@map("comments")
+}
+
+model CommentReaction {
+  id        String   @id @default(uuid())
+  commentId String
+  userId    String
+  emoji     String
+  createdAt DateTime @default(now())
+
+  comment Comment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
+  @@unique([commentId, userId, emoji])
+  @@map("comment_reactions")
+}
+
+model Update {
+  id        String   @id @default(uuid())
+  itemId    String
+  userId    String
+  body      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  item Item? @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("updates")
+}
+
+// ─── ACTIVITY & NOTIFICATIONS ───────────────────────────
+
+model Activity {
+  id         String       @id @default(uuid())
+  boardId    String
+  itemId     String?
+  userId     String
+  action     ActivityAction
+  details    Json?
+  createdAt  DateTime     @default(now())
+
+  board Board @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  item  Item? @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("activities")
+}
+
+enum ActivityAction {
+  ITEM_CREATED
+  ITEM_UPDATED
+  ITEM_DELETED
+  ITEM_MOVED
+  STATUS_CHANGED
+  ASSIGNEE_ADDED
+  ASSIGNEE_REMOVED
+  COMMENT_ADDED
+  COLUMN_VALUE_CHANGED
+  GROUP_CREATED
+  GROUP_DELETED
+  BOARD_CREATED
+  BOARD_UPDATED
+  AUTOMATION_TRIGGERED
+}
+
+model Notification {
+  id        String            @id @default(uuid())
+  userId    String
+  title     String
+  body      String?
+  type      NotificationType
+  isRead    Boolean           @default(false)
+  actionUrl String?
+  createdAt DateTime          @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
+}
+
+enum NotificationType {
+  ASSIGNMENT
+  MENTION
+  STATUS_CHANGE
+  DUE_DATE
+  AUTOMATION
+  SYSTEM
+}
+
+// ─── AUTOMATIONS ────────────────────────────────────────
+
+model Automation {
+  id          String            @id @default(uuid())
+  boardId     String
+  userId      String
+  name        String
+  trigger     AutomationTrigger
+  conditions  Json?             // filter conditions
+  action      AutomationAction
+  actionConfig Json?            // action-specific config
+  isEnabled   Boolean           @default(true)
+  lastFiredAt DateTime?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  board Board @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("automations")
+}
+
+enum AutomationTrigger {
+  STATUS_CHANGED
+  DATE_ARRIVES
+  ITEM_CREATED
+  ITEM_MOVED_TO_GROUP
+  PRIORITY_CHANGED
+  ASSIGNEE_CHANGED
+  COLUMN_VALUE_CHANGED
+  RECURRING_SCHEDULE
+}
+
+enum AutomationAction {
+  CHANGE_STATUS
+  MOVE_ITEM_TO_GROUP
+  NOTIFY_ASSIGNEE
+  NOTIFY_USER
+  SET_COLUMN_VALUE
+  CREATE_ITEM
+  SEND_EMAIL
+  ASSIGN_USER
+  SHIFT_DATE
+}
+
+// ─── VIEWS ──────────────────────────────────────────────
+
+model BoardView {
+  id        String   @id @default(uuid())
+  boardId   String
+  userId    String
+  name      String
+  viewKind  BoardKind @default(TABLE)
+  config    Json?    // view-specific filters, sorts, groupings
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  board Board @relation(fields: [boardId], references: [id], onDelete: Cascade)
+
+  @@map("board_views")
+}
+
+// ─── TEMPLATES ──────────────────────────────────────────
+
+model BoardTemplate {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  category    String?
+  icon        String?
+  config      Json     // full board structure (columns, groups, automations)
+  isPublic    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("board_templates")
+}

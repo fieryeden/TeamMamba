@@ -1,0 +1,90 @@
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { hashPassword, verifyPassword, signToken } from "@/lib/auth";
+import { registerSchema, loginSchema } from "@/lib/validations";
+
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json();
+    const { email, password, firstName, lastName } = registerSchema.parse(body);
+
+    const existing = await prisma.user.findUnique({ where: { email } });
+    if (existing) {
+      return NextResponse.json({ error: "Email already registered" }, { status: 409 });
+    }
+
+    const passwordHash = await hashPassword(password);
+    const user = await prisma.user.create({
+      data: { email, passwordHash, firstName, lastName },
+      select: { id: true, email: true, firstName: true, lastName: true, role: true },
+    });
+
+    // Create a personal workspace
+    const workspace = await prisma.workspace.create({
+      data: {
+        name: `${firstName}'s Workspace`,
+        ownerId: user.id,
+        members: { create: { userId: user.id, role: "OWNER" } },
+      },
+    });
+
+    const token = signToken({ userId: user.id, email: user.email });
+
+    const res = NextResponse.json({ user, workspace, token }, { status: 201 });
+    res.cookies.set("token", token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 60 * 60 * 24 * 7, // 7 days
+      path: "/",
+    });
+    return res;
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === "ZodError") {
+      return NextResponse.json({ error: "Invalid input", details: err }, { status: 400 });
+    }
+    console.error("Register error:", err);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+  }
+}
+
+// Login
+export async function PUT(req: NextRequest) {
+  try {
+    const body = await req.json();
+    const { email, password } = loginSchema.parse(body);
+
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user) {
+      return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
+    }
+
+    const valid = await verifyPassword(password, user.passwordHash);
+    if (!valid) {
+      return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
+    }
+
+    await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+
+    const token = signToken({ userId: user.id, email: user.email });
+
+    const res = NextResponse.json({
+      user: {
+        id: user.id, email: user.email, firstName: user.firstName,
+        lastName: user.lastName, role: user.role, avatarUrl: user.avatarUrl,
+      },
+      token,
+    });
+    res.cookies.set("token", token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 60 * 60 * 24 * 7,
+      path: "/",
+    });
+    return res;
+  } catch (err: unknown) {
+    console.error("Login error:", err);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+  }
+}
