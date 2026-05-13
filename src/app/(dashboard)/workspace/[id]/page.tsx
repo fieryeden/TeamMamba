@@ -27,5 +27,5 @@ export default async function WorkspacePage({ params }: { params: Promise<{ id: 
 
   if (!workspace) redirect("/dashboard");
 
-  return <WorkspaceClient user={user} workspace={workspace} />;
+  return <WorkspaceClient workspace={workspace} />;
 }

@@ -1,14 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
 import {
   FolderKanban, Plus, TrendingUp, Users, Activity, ChevronRight,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
-import { cn, formatRelativeTime } from "@/lib/utils";
+import { formatRelativeTime } from "@/lib/utils";
 
 interface DashboardClientProps {
   user: { id: string; firstName: string; lastName: string; email: string; avatarUrl: string | null };
@@ -25,8 +23,6 @@ interface DashboardClientProps {
 }
 
 export function DashboardClient({ user, workspaces, recentActivities }: DashboardClientProps) {
-  const [showNewWorkspace, setShowNewWorkspace] = useState(false);
-
   const totalItems = workspaces.reduce(
     (sum, ws) => sum + ws.boards.reduce((s, b) => s + b._count.items, 0), 0
   );
@@ -106,7 +102,7 @@ export function DashboardClient({ user, workspaces, recentActivities }: Dashboar
                   {ws.icon && <span>{ws.icon}</span>}
                   {ws.name}
                 </CardTitle>
-                <Link href={`/dashboard/workspace/${ws.id}`}>
+                <Link href={`/workspace/${ws.id}`}>
                   <Button variant="ghost" size="sm">
                     Open <ChevronRight className="ml-1 h-3 w-3" />
                   </Button>
@@ -118,7 +114,7 @@ export function DashboardClient({ user, workspaces, recentActivities }: Dashboar
                 {ws.boards.slice(0, 5).map((board) => (
                   <Link
                     key={board.id}
-                    href={`/dashboard/board/${board.id}`}
+                    href={`/board/${board.id}`}
                     className="flex items-center justify-between rounded-lg border p-3 hover:bg-accent/50 transition-colors"
                   >
                     <div className="flex items-center gap-3">
@@ -137,12 +133,14 @@ export function DashboardClient({ user, workspaces, recentActivities }: Dashboar
         ))}
 
         {/* New workspace card */}
-        <Card className="border-dashed cursor-pointer hover:border-mamba-400 transition-colors" onClick={() => setShowNewWorkspace(true)}>
-          <CardContent className="flex flex-col items-center justify-center py-8">
-            <Plus className="h-8 w-8 text-muted-foreground mb-2" />
-            <p className="text-sm font-medium text-muted-foreground">Create Workspace</p>
-          </CardContent>
-        </Card>
+        <Link href="/workspaces">
+          <Card className="border-dashed cursor-pointer hover:border-mamba-400 transition-colors">
+            <CardContent className="flex flex-col items-center justify-center py-8">
+              <Plus className="h-8 w-8 text-muted-foreground mb-2" />
+              <p className="text-sm font-medium text-muted-foreground">Create Workspace</p>
+            </CardContent>
+          </Card>
+        </Link>
       </div>
 
       {/* Recent Activity */}

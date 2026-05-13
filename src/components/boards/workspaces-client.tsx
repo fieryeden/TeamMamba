@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Plus, FolderKanban, Users, MoreHorizontal, Trash2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -16,10 +17,12 @@ import {
 interface Workspace {
   id: string; name: string; description: string | null; icon: string | null;
   owner: { id: string; firstName: string; lastName: string };
+  boards: Array<{ id: string; name: string; boardKind: string; _count: { items: number } }>;
   _count: { boards: number; members: number };
 }
 
 export function WorkspacesClient({ workspaces: initial }: { workspaces: Workspace[] }) {
+  const router = useRouter();
   const [workspaces, setWorkspaces] = useState(initial);
   const [showNew, setShowNew] = useState(false);
   const [name, setName] = useState("");
@@ -35,7 +38,10 @@ export function WorkspacesClient({ workspaces: initial }: { workspaces: Workspac
       });
       const data = await res.json();
       if (res.ok) {
-        setWorkspaces((prev) => [...prev, { ...data.workspace, _count: { boards: 0, members: 1 } }]);
+        setWorkspaces((prev) => [
+          ...prev,
+          { ...data.workspace, boards: [], _count: { boards: 0, members: 1 } },
+        ]);
         setName("");
         setDescription("");
         setShowNew(false);
@@ -56,8 +62,11 @@ export function WorkspacesClient({ workspaces: initial }: { workspaces: Workspac
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {workspaces.map((ws) => (
-          <Link key={ws.id} href={`/dashboard/workspace/${ws.id}`}>
-            <Card className="hover:shadow-md transition-shadow cursor-pointer group">
+          <Card
+            key={ws.id}
+            className="hover:shadow-md transition-shadow cursor-pointer group"
+            onClick={() => router.push(`/workspace/${ws.id}`)}
+          >
               <CardHeader className="pb-2">
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-base flex items-center gap-2">
@@ -93,9 +102,24 @@ export function WorkspacesClient({ workspaces: initial }: { workspaces: Workspac
                     <Users className="h-3 w-3" /> {ws._count.members} members
                   </span>
                 </div>
+                <div className="mt-3 space-y-1">
+                  {ws.boards.slice(0, 4).map((board) => (
+                    <Link
+                      key={board.id}
+                      href={`/board/${board.id}`}
+                      className="block rounded-md border bg-background px-2 py-1.5 text-xs hover:bg-accent/50"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <span className="font-medium">{board.name}</span>
+                      <span className="ml-2 text-muted-foreground">{board._count.items} items</span>
+                    </Link>
+                  ))}
+                  {ws.boards.length === 0 && (
+                    <p className="text-xs text-muted-foreground">No boards yet</p>
+                  )}
+                </div>
               </CardContent>
             </Card>
-          </Link>
         ))}
 
         <Card

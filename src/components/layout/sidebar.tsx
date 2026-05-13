@@ -10,7 +10,6 @@ import {
   Zap,
   Bell,
   Users,
-  LogOut,
 } from "lucide-react";
 
 interface SidebarProps {
@@ -29,12 +28,20 @@ export function DashboardSidebar({ user }: SidebarProps) {
 
   const navItems = [
     { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-    { href: "/dashboard/workspaces", label: "Workspaces", icon: FolderKanban },
-    { href: "/dashboard/automations", label: "Automations", icon: Zap },
-    { href: "/dashboard/team", label: "Team", icon: Users },
-    { href: "/dashboard/notifications", label: "Notifications", icon: Bell },
-    { href: "/dashboard/settings", label: "Settings", icon: Settings },
+    { href: "/workspaces", label: "Workspaces", icon: FolderKanban },
+    { href: "/automations", label: "Automations", icon: Zap },
+    { href: "/team", label: "Team", icon: Users },
+    { href: "/notifications", label: "Notifications", icon: Bell },
+    { href: "/settings", label: "Settings", icon: Settings },
   ];
+
+  const isActive = (href: string) => {
+    if (href === "/dashboard") return pathname === href;
+    if (href === "/workspaces") {
+      return pathname === "/workspaces" || pathname.startsWith("/workspace/");
+    }
+    return pathname === href;
+  };
 
   return (
     <aside className="flex w-64 flex-col border-r bg-card">
@@ -54,7 +61,7 @@ export function DashboardSidebar({ user }: SidebarProps) {
             href={item.href}
             className={cn(
               "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-              pathname === item.href
+              isActive(item.href)
                 ? "bg-mamba-50 text-mamba-700 dark:bg-mamba-900/20 dark:text-mamba-400"
                 : "text-muted-foreground hover:bg-accent hover:text-foreground"
             )}

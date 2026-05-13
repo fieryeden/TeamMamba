@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import {
-  Plus, FolderKanban, Users, Settings, MoreHorizontal, Trash2,
+  Plus, FolderKanban, MoreHorizontal, Trash2,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -17,7 +17,6 @@ import {
 } from "@/components/ui/dialog";
 
 interface WorkspaceClientProps {
-  user: { id: string; firstName: string; lastName: string };
   workspace: {
     id: string; name: string; description: string | null; icon: string | null;
     owner: { id: string; firstName: string; lastName: string; avatarUrl: string | null };
@@ -26,7 +25,7 @@ interface WorkspaceClientProps {
   };
 }
 
-export function WorkspaceClient({ user, workspace }: WorkspaceClientProps) {
+export function WorkspaceClient({ workspace }: WorkspaceClientProps) {
   const [boards, setBoards] = useState(workspace.boards);
   const [showNewBoard, setShowNewBoard] = useState(false);
   const [newBoardName, setNewBoardName] = useState("");
@@ -93,7 +92,7 @@ export function WorkspaceClient({ user, workspace }: WorkspaceClientProps) {
       {/* Boards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {boards.map((board) => (
-          <Link key={board.id} href={`/dashboard/board/${board.id}`}>
+          <Link key={board.id} href={`/board/${board.id}`}>
             <Card className="hover:shadow-md transition-shadow cursor-pointer group">
               <CardHeader className="pb-2">
                 <div className="flex items-center justify-between">

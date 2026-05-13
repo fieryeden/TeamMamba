@@ -11,6 +11,12 @@ export default async function WorkspacesPage() {
     where: { members: { some: { userId: user.id } } },
     include: {
       owner: { select: { id: true, firstName: true, lastName: true } },
+      boards: {
+        include: {
+          _count: { select: { items: true } },
+        },
+        orderBy: { updatedAt: "desc" },
+      },
       _count: { select: { boards: true, members: true } },
     },
     orderBy: { updatedAt: "desc" },
