@@ -18,6 +18,12 @@ model User {
   avatarUrl     String?
   role          UserRole  @default(MEMBER)
   status        UserStatus @default(ACTIVE)
+  themePreference ThemePreference @default(SYSTEM)
+  emailNotificationsEnabled Boolean @default(true)
+  emailOnMentions Boolean @default(true)
+  emailOnAssignments Boolean @default(true)
+  emailOnDueDates Boolean @default(true)
+  onboardingCompleted Boolean @default(false)
   timezone      String    @default("America/Los_Angeles")
   lastLoginAt   DateTime?
   createdAt     DateTime  @default(now())
@@ -34,6 +40,8 @@ model User {
   notifications Notification[]
   updates       Update[]
   apiTokens ApiToken[]
+  timeEntries TimeEntry[]
+  guestAccessTokens GuestAccess[]
 
   @@map("users")
 }
@@ -62,6 +70,12 @@ enum UserStatus {
   ACTIVE
   INACTIVE
   SUSPENDED
+}
+
+enum ThemePreference {
+  LIGHT
+  DARK
+  SYSTEM
 }
 
 // ─── WORKSPACES & BOARDS ────────────────────────────────
@@ -125,6 +139,7 @@ model Board {
   automations Automation[]
   views       BoardView[]
   activities  Activity[]
+  guestAccess GuestAccess[]
 
   @@map("boards")
 }
@@ -243,6 +258,7 @@ model Item {
   activities   Activity[]
   updates      Update[]
   subitems     Subitem[]
+  timeEntries  TimeEntry[]
 
   // Dependencies
   dependenciesFrom Dependency[] @relation("DependencyFrom")
@@ -496,4 +512,35 @@ model BoardTemplate {
   updatedAt   DateTime @updatedAt
 
   @@map("board_templates")
+}
+
+model TimeEntry {
+  id              String   @id @default(uuid())
+  itemId          String
+  userId          String
+  startTime       DateTime
+  endTime         DateTime?
+  durationSeconds Int      @default(0)
+  isRunning       Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  item Item @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("time_entries")
+}
+
+model GuestAccess {
+  id          String   @id @default(uuid())
+  boardId     String
+  token       String   @unique
+  createdById String
+  expiresAt   DateTime?
+  createdAt   DateTime @default(now())
+
+  board Board @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  createdBy User @relation(fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@map("guest_access")
 }

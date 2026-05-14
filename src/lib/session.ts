@@ -21,6 +21,8 @@ export async function getAuthUser() {
       avatarUrl: true,
       role: true,
       status: true,
+      themePreference: true,
+      onboardingCompleted: true,
       timezone: true,
     },
   });

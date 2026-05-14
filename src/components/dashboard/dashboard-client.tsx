@@ -1,15 +1,24 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import {
   FolderKanban, Plus, TrendingUp, Users, Activity, ChevronRight,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { formatRelativeTime } from "@/lib/utils";
 
 interface DashboardClientProps {
-  user: { id: string; firstName: string; lastName: string; email: string; avatarUrl: string | null };
+  user: {
+    id: string;
+    firstName: string;
+    lastName: string;
+    email: string;
+    avatarUrl: string | null;
+    onboardingCompleted?: boolean;
+  };
   workspaces: Array<{
     id: string; name: string; description: string | null; icon: string | null;
     boards: Array<{ id: string; name: string; boardKind: string; _count: { items: number } }>;
@@ -23,10 +32,33 @@ interface DashboardClientProps {
 }
 
 export function DashboardClient({ user, workspaces, recentActivities }: DashboardClientProps) {
+  const [showOnboarding, setShowOnboarding] = useState(!user.onboardingCompleted);
+  const [onboardingStep, setOnboardingStep] = useState(0);
+  const steps = [
+    { title: "Create your first board", description: "Use the New Board button to kick off work." },
+    { title: "Invite teammates", description: "Add people in Team or Workspace members." },
+    { title: "Set up automations", description: "Open Automations to automate repetitive work." },
+    { title: "Track progress", description: "Use Timeline/Calendar/Kanban views to stay on track." },
+  ];
+
   const totalItems = workspaces.reduce(
     (sum, ws) => sum + ws.boards.reduce((s, b) => s + b._count.items, 0), 0
   );
   const totalBoards = workspaces.reduce((sum, ws) => sum + ws.boards.length, 0);
+
+  const completeOnboarding = async () => {
+    try {
+      await fetch("/api/auth", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ onboardingCompleted: true }),
+      });
+    } catch {
+      // ignore
+    } finally {
+      setShowOnboarding(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -175,6 +207,56 @@ export function DashboardClient({ user, workspaces, recentActivities }: Dashboar
           </div>
         </CardContent>
       </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">Getting Started Checklist</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {steps.map((step, index) => (
+            <div key={step.title} className="flex items-center justify-between rounded-md border px-3 py-2">
+              <div>
+                <p className="text-sm font-medium">{step.title}</p>
+                <p className="text-xs text-muted-foreground">{step.description}</p>
+              </div>
+              <span className="text-xs text-muted-foreground">
+                {user.onboardingCompleted ? "Done" : onboardingStep > index ? "Done" : "Pending"}
+              </span>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
+      <Dialog open={showOnboarding} onOpenChange={setShowOnboarding}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Welcome to TeamMamba</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2">
+            <p className="text-sm font-semibold">{steps[onboardingStep].title}</p>
+            <p className="text-sm text-muted-foreground">{steps[onboardingStep].description}</p>
+            <p className="text-xs text-muted-foreground">
+              Step {onboardingStep + 1} of {steps.length}
+            </p>
+          </div>
+          <DialogFooter>
+            {onboardingStep > 0 && (
+              <Button variant="ghost" onClick={() => setOnboardingStep((prev) => Math.max(0, prev - 1))}>
+                Back
+              </Button>
+            )}
+            {onboardingStep < steps.length - 1 ? (
+              <Button className="bg-mamba-600 hover:bg-mamba-700" onClick={() => setOnboardingStep((prev) => prev + 1)}>
+                Next
+              </Button>
+            ) : (
+              <Button className="bg-mamba-600 hover:bg-mamba-700" onClick={completeOnboarding}>
+                Finish
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -27,6 +27,7 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
                 take: 10,
                 include: {
                   user: { select: { id: true, firstName: true, lastName: true, avatarUrl: true } },
+                  reactions: true,
                 },
               },
               updates: {
@@ -41,6 +42,22 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
                 take: 10,
                 include: {
                   user: { select: { id: true, firstName: true, lastName: true, avatarUrl: true } },
+                },
+              },
+              timeEntries: {
+                orderBy: { createdAt: "desc" },
+                select: {
+                  id: true,
+                  startTime: true,
+                  endTime: true,
+                  durationSeconds: true,
+                  isRunning: true,
+                },
+              },
+              subitems: {
+                orderBy: { position: "asc" },
+                include: {
+                  columnValues: { include: { column: true } },
                 },
               },
               _count: { select: { comments: true, subitems: true } },

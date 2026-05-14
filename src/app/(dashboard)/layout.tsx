@@ -1,8 +1,7 @@
 import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
-import { DashboardSidebar } from "@/components/layout/sidebar";
-import { TopBar } from "@/components/layout/topbar";
+import { DashboardShell } from "@/components/layout/dashboard-shell";
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const user = await getAuthUser();
@@ -15,14 +14,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
   });
 
   return (
-    <div className="flex h-screen overflow-hidden">
-      <DashboardSidebar user={user} />
-      <div className="flex flex-1 flex-col overflow-hidden">
-        <TopBar user={user} workspaces={JSON.parse(JSON.stringify(workspaces))} />
-        <main className="flex-1 overflow-auto bg-muted/30 p-6">
-          {children}
-        </main>
-      </div>
-    </div>
+    <DashboardShell user={user} workspaces={JSON.parse(JSON.stringify(workspaces))}>
+      {children}
+    </DashboardShell>
   );
 }

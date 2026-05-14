@@ -21,9 +21,11 @@ interface SidebarProps {
     avatarUrl: string | null;
     role: string;
   };
+  className?: string;
+  onNavigate?: () => void;
 }
 
-export function DashboardSidebar({ user }: SidebarProps) {
+export function DashboardSidebar({ user, className, onNavigate }: SidebarProps) {
   const pathname = usePathname();
 
   const navItems = [
@@ -44,7 +46,7 @@ export function DashboardSidebar({ user }: SidebarProps) {
   };
 
   return (
-    <aside className="flex w-64 flex-col border-r bg-card">
+    <aside className={cn("flex w-64 flex-col border-r bg-card", className)}>
       {/* Logo */}
       <div className="flex h-14 items-center gap-2 border-b px-4">
         <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-mamba-600 text-white font-bold text-sm">
@@ -59,6 +61,7 @@ export function DashboardSidebar({ user }: SidebarProps) {
           <Link
             key={item.href}
             href={item.href}
+            onClick={onNavigate}
             className={cn(
               "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
               isActive(item.href)

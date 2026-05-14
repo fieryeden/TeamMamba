@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getAuthUser } from "@/lib/session";
 import { updateColumnValueSchema } from "@/lib/validations";
+import { evaluateFormulaExpression } from "@/lib/formulas";
+import { sendEmail } from "@/lib/mailer";
 
 export async function PATCH(
   req: NextRequest,
@@ -30,10 +32,49 @@ export async function PATCH(
     if (item?.itemId) {
       const itemData = await prisma.item.findUnique({
         where: { id: item.itemId },
-        select: { boardId: true, groupId: true },
+        include: {
+          board: { include: { columns: { orderBy: { order: "asc" } } } },
+          columnValues: { include: { column: true } },
+          assignees: { include: { user: true } },
+        },
       });
 
       if (itemData) {
+        const formulaColumns = itemData.board.columns.filter((column) => column.columnType === "FORMULA");
+        if (formulaColumns.length > 0) {
+          const contextByTitle: Record<string, unknown> = Object.fromEntries(
+            itemData.columnValues.map((entry) => [entry.column.title, entry.value])
+          );
+
+          for (const formulaColumn of formulaColumns) {
+            const formula = (formulaColumn.config as { formula?: string } | null)?.formula;
+            if (!formula) continue;
+            let computedValue: unknown = null;
+            try {
+              computedValue = evaluateFormulaExpression(formula, contextByTitle);
+            } catch {
+              computedValue = null;
+            }
+
+            const existing = itemData.columnValues.find((entry) => entry.columnId === formulaColumn.id);
+            if (existing) {
+              await prisma.columnValue.update({
+                where: { id: existing.id },
+                data: { value: JSON.parse(JSON.stringify(computedValue)) as any },
+              });
+            } else {
+              await prisma.columnValue.create({
+                data: {
+                  itemId: itemData.id,
+                  columnId: formulaColumn.id,
+                  value: JSON.parse(JSON.stringify(computedValue)) as any,
+                },
+              });
+            }
+            contextByTitle[formulaColumn.title] = computedValue;
+          }
+        }
+
         // Log activity
         await prisma.activity.create({
           data: {
@@ -60,6 +101,52 @@ export async function PATCH(
               });
             }
           }
+
+          if (auto.action === "SEND_EMAIL") {
+            const config = (auto.actionConfig as Record<string, unknown> | null) ?? {};
+            const to = typeof config.to === "string" ? config.to : user.email;
+            const subject = typeof config.subject === "string" ? config.subject : `Automation: ${auto.name}`;
+            const text = typeof config.body === "string" ? config.body : `Item "${itemData.name}" changed in ${itemData.board.name}.`;
+            await sendEmail({ to, subject, text });
+          }
+        }
+
+        if (columnValue.column.columnType === "PEOPLE") {
+          const userIds = Array.isArray(value) ? value.filter((entry) => typeof entry === "string") : [];
+          if (userIds.length > 0) {
+            const recipients = await prisma.user.findMany({
+              where: {
+                id: { in: userIds as string[] },
+                emailNotificationsEnabled: true,
+                emailOnAssignments: true,
+              },
+              select: { email: true },
+            });
+            await Promise.all(
+              recipients.map((recipient) =>
+                sendEmail({
+                  to: recipient.email,
+                  subject: `Assigned to item: ${itemData.name}`,
+                  text: `You were assigned to "${itemData.name}" on board "${itemData.board.name}".`,
+                })
+              )
+            );
+          }
+        }
+
+        if (columnValue.column.columnType === "DATE" && value) {
+          const recipients = itemData.assignees
+            .map((assignee) => assignee.user)
+            .filter((member) => member.emailNotificationsEnabled && member.emailOnDueDates);
+          await Promise.all(
+            recipients.map((recipient) =>
+              sendEmail({
+                to: recipient.email,
+                subject: `Due date updated: ${itemData.name}`,
+                text: `The due date for "${itemData.name}" is now ${String(value)}.`,
+              })
+            )
+          );
         }
       }
     }

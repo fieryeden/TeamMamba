@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getAuthUser } from "@/lib/session";
 import { createBoardSchema, updateBoardSchema } from "@/lib/validations";
+import { getBoardTemplate } from "@/lib/board-templates";
 
 export async function GET(req: NextRequest) {
   try {
@@ -42,6 +43,14 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json();
     const data = createBoardSchema.parse(body);
+    const template = getBoardTemplate(data.templateKey);
+    const templateColumns = template?.columns ?? [
+      { title: "Status", columnType: "STATUS", config: { labels: ["Not Started", "Working on it", "Done", "Stuck"], colors: ["#c4c4c4", "#fdab3d", "#00c875", "#e2445c"] } },
+      { title: "People", columnType: "PEOPLE" },
+      { title: "Date", columnType: "DATE" },
+      { title: "Priority", columnType: "STATUS", config: { labels: ["Critical", "High", "Medium", "Low"], colors: ["#333333", "#e2445c", "#fdab3d", "#579bfc"] } },
+    ];
+    const templateGroups = template?.groups ?? [{ name: "Group 1", color: "#579bfc" }];
 
     // Create board with default columns and groups
     const board = await prisma.board.create({
@@ -53,19 +62,21 @@ export async function POST(req: NextRequest) {
         boardKind: data.boardKind,
         columns: {
           createMany: {
-            data: [
-              { title: "Status", columnType: "STATUS", order: 0, config: { labels: ["Not Started", "Working on it", "Done", "Stuck"], colors: ["#c4c4c4", "#fdab3d", "#00c875", "#e2445c"] } },
-              { title: "People", columnType: "PEOPLE", order: 1 },
-              { title: "Date", columnType: "DATE", order: 2 },
-              { title: "Priority", columnType: "STATUS", order: 3, config: { labels: ["Critical", "High", "Medium", "Low"], colors: ["#333333", "#e2445c", "#fdab3d", "#579bfc"] } },
-            ],
+            data: templateColumns.map((column, index) => ({
+              title: column.title,
+              columnType: column.columnType,
+              order: index,
+              config: column.config ? (JSON.parse(JSON.stringify(column.config)) as any) : undefined,
+            })),
           },
         },
         groups: {
           createMany: {
-            data: [
-              { name: "Group 1", color: "#579bfc", position: 0 },
-            ],
+            data: templateGroups.map((group, index) => ({
+              name: group.name,
+              color: group.color,
+              position: index,
+            })),
           },
         },
         members: { create: { userId: user.id, role: "OWNER" } },

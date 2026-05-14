@@ -2,11 +2,14 @@ import { createServer } from "http";
 import { parse } from "url";
 import next from "next";
 import { Server as SocketIOServer } from "socket.io";
+import { PrismaClient } from "@prisma/client";
+import { sendEmail } from "./src/lib/mailer";
 
 const port = parseInt(process.env.PORT || "3010", 10);
 const dev = process.env.NODE_ENV !== "production";
 const app = next({ dev });
 const handle = app.getRequestHandler();
+const prisma = new PrismaClient();
 
 app.prepare().then(() => {
   const server = createServer((req, res) => {
@@ -24,6 +27,53 @@ app.prepare().then(() => {
 
   // Track connected users per workspace/board
   const connectedUsers = new Map<string, Set<string>>();
+
+  const runRecurringAutomations = async () => {
+    try {
+      const autos = await prisma.automation.findMany({
+        where: {
+          trigger: "RECURRING_SCHEDULE",
+          isEnabled: true,
+        },
+        include: {
+          board: { select: { name: true } },
+        },
+      });
+
+      const now = new Date();
+      for (const auto of autos) {
+        const config = (auto.conditions as Record<string, unknown> | null) ?? {};
+        const intervalMinutes = Number(config.intervalMinutes ?? 60);
+        const last = auto.lastFiredAt ? auto.lastFiredAt.getTime() : 0;
+        if (last && now.getTime() - last < intervalMinutes * 60 * 1000) continue;
+
+        if (auto.action === "SEND_EMAIL") {
+          const actionConfig = (auto.actionConfig as Record<string, unknown> | null) ?? {};
+          const to = typeof actionConfig.to === "string" ? actionConfig.to : process.env.SMTP_USER;
+          if (to) {
+            await sendEmail({
+              to,
+              subject: typeof actionConfig.subject === "string" ? actionConfig.subject : `Recurring automation: ${auto.name}`,
+              text:
+                typeof actionConfig.body === "string"
+                  ? actionConfig.body
+                  : `Recurring automation "${auto.name}" executed for board "${auto.board.name}".`,
+            });
+          }
+        }
+
+        await prisma.automation.update({
+          where: { id: auto.id },
+          data: { lastFiredAt: now },
+        });
+      }
+    } catch (err) {
+      console.error("[Automation Scheduler]", err);
+    }
+  };
+
+  setInterval(runRecurringAutomations, 60000);
+  runRecurringAutomations().catch(() => {});
 
   io.on("connection", (socket) => {
     console.log(`🔌 Connected: ${socket.id}`);

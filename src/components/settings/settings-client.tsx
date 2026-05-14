@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Settings, User, Key, Bell, Palette, Shield, Copy, Check, Trash2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { formatDate } from "@/lib/utils";
+import { useTheme } from "next-themes";
 
 interface SettingsClientProps {
   user: {
@@ -18,7 +19,12 @@ interface SettingsClientProps {
     lastName: string;
     avatarUrl: string | null;
     role: string;
+    themePreference: "LIGHT" | "DARK" | "SYSTEM";
     timezone: string;
+    emailNotificationsEnabled: boolean;
+    emailOnMentions: boolean;
+    emailOnAssignments: boolean;
+    emailOnDueDates: boolean;
     createdAt: string;
   };
   apiTokens: Array<{ id: string; name: string; lastUsed: string | null; createdAt: string }>;
@@ -40,16 +46,35 @@ export function SettingsClient({ user, apiTokens: initialTokens }: SettingsClien
   const [copied, setCopied] = useState(false);
   const [showTokenDialog, setShowTokenDialog] = useState(false);
   const [revokingId, setRevokingId] = useState<string | null>(null);
+  const [themeSaving, setThemeSaving] = useState(false);
+  const [emailPrefs, setEmailPrefs] = useState({
+    emailNotificationsEnabled: user.emailNotificationsEnabled,
+    emailOnMentions: user.emailOnMentions,
+    emailOnAssignments: user.emailOnAssignments,
+    emailOnDueDates: user.emailOnDueDates,
+  });
 
   // Appearance state
-  const [theme, setTheme] = useState<string>(() => {
-    if (typeof window !== "undefined") return localStorage.getItem("tm-theme") || "System";
-    return "System";
-  });
+  const { theme, setTheme } = useTheme();
+  const [themePreference, setThemePreference] = useState<"LIGHT" | "DARK" | "SYSTEM">(user.themePreference);
   const [accentColor, setAccentColor] = useState<string>(() => {
     if (typeof window !== "undefined") return localStorage.getItem("tm-accent") || "#3b82f6";
     return "#3b82f6";
   });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const storedTheme = localStorage.getItem("tm-theme");
+    if (!storedTheme) {
+      const initialTheme = user.themePreference.toLowerCase();
+      setTheme(initialTheme);
+      setThemePreference(user.themePreference);
+      return;
+    }
+    if (storedTheme === "light") setThemePreference("LIGHT");
+    if (storedTheme === "dark") setThemePreference("DARK");
+    if (storedTheme === "system") setThemePreference("SYSTEM");
+  }, [setTheme, user.themePreference]);
 
   const handleSaveProfile = async () => {
     setSaving(true);
@@ -112,21 +137,20 @@ export function SettingsClient({ user, apiTokens: initialTokens }: SettingsClien
     }
   };
 
-  const handleThemeChange = (newTheme: string) => {
-    setTheme(newTheme);
-    localStorage.setItem("tm-theme", newTheme);
-    // Apply theme class to document
-    const root = document.documentElement;
-    root.classList.remove("light", "dark");
-    if (newTheme === "Dark") {
-      root.classList.add("dark");
-    } else if (newTheme === "Light") {
-      root.classList.remove("dark");
-    } else {
-      // System preference
-      if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
-        root.classList.add("dark");
-      }
+  const handleThemeChange = async (newTheme: "LIGHT" | "DARK" | "SYSTEM") => {
+    setThemePreference(newTheme);
+    setTheme(newTheme.toLowerCase());
+    setThemeSaving(true);
+    try {
+      await fetch("/api/auth", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ themePreference: newTheme }),
+      });
+    } catch (err) {
+      console.error("Failed to update theme preference:", err);
+    } finally {
+      setThemeSaving(false);
     }
   };
 
@@ -134,6 +158,20 @@ export function SettingsClient({ user, apiTokens: initialTokens }: SettingsClien
     setAccentColor(color);
     localStorage.setItem("tm-accent", color);
     document.documentElement.style.setProperty("--accent", color);
+  };
+
+  const handleEmailPrefChange = async (key: keyof typeof emailPrefs, value: boolean) => {
+    const next = { ...emailPrefs, [key]: value };
+    setEmailPrefs(next);
+    try {
+      await fetch("/api/auth", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(next),
+      });
+    } catch (err) {
+      console.error("Failed to update email preference:", err);
+    }
   };
 
   return (
@@ -280,18 +318,27 @@ export function SettingsClient({ user, apiTokens: initialTokens }: SettingsClien
             </CardHeader>
             <CardContent className="space-y-3">
               {[
-                { label: "Item assigned to me", desc: "Get notified when someone assigns you an item", default: true },
-                { label: "Status changes", desc: "When an item you're following changes status", default: true },
-                { label: "Comments and mentions", desc: "When someone mentions you in a comment", default: true },
-                { label: "Due date reminders", desc: "Remind me before items are due", default: true },
-                { label: "Automation activity", desc: "When automations run on your boards", default: false },
+                { key: "emailNotificationsEnabled", label: "Email notifications", desc: "Master toggle for email alerts" },
+                { key: "emailOnAssignments", label: "Item assigned to me", desc: "Get notified when someone assigns you an item" },
+                { key: "emailOnMentions", label: "Comments and mentions", desc: "When someone mentions you in a comment" },
+                { key: "emailOnDueDates", label: "Due date reminders", desc: "Remind me before items are due" },
               ].map((pref) => (
                 <label key={pref.label} className="flex items-center justify-between rounded-lg border p-3 cursor-pointer">
                   <div>
                     <p className="text-sm font-medium">{pref.label}</p>
                     <p className="text-xs text-muted-foreground">{pref.desc}</p>
                   </div>
-                  <input type="checkbox" defaultChecked={pref.default} className="h-4 w-4 rounded" />
+                  <input
+                    type="checkbox"
+                    checked={emailPrefs[pref.key as keyof typeof emailPrefs]}
+                    onChange={(event) =>
+                      handleEmailPrefChange(
+                        pref.key as keyof typeof emailPrefs,
+                        event.target.checked
+                      )
+                    }
+                    className="h-4 w-4 rounded"
+                  />
                 </label>
               ))}
             </CardContent>
@@ -308,19 +355,21 @@ export function SettingsClient({ user, apiTokens: initialTokens }: SettingsClien
               <div className="space-y-2">
                 <label className="text-sm font-medium">Theme</label>
                 <div className="grid grid-cols-3 gap-3">
-                  {["Light", "Dark", "System"].map((t) => (
+                  {["LIGHT", "DARK", "SYSTEM"].map((t) => (
                     <button
                       key={t}
-                      onClick={() => handleThemeChange(t)}
+                      onClick={() => handleThemeChange(t as "LIGHT" | "DARK" | "SYSTEM")}
                       className={`rounded-lg border p-4 text-sm font-medium hover:bg-accent transition-colors text-center ${
-                        theme === t ? "border-mamba-500 bg-mamba-50 ring-2 ring-mamba-500/30" : ""
+                        themePreference === t ? "border-mamba-500 bg-mamba-50 ring-2 ring-mamba-500/30" : ""
                       }`}
                     >
-                      {t === "Light" && "☀️"}{t === "Dark" && "🌙"}{t === "System" && "💻"}
-                      <br />{t}
+                      {t}
                     </button>
                   ))}
                 </div>
+                <p className="text-xs text-muted-foreground">
+                  {themeSaving ? "Saving theme..." : `Current mode: ${(theme ?? "system").toUpperCase()}`}
+                </p>
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-medium">Accent Color</label>

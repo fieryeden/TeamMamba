@@ -2,7 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getAuthUser } from "@/lib/session";
 import { hashPassword, verifyPassword, signToken } from "@/lib/auth";
-import { registerSchema, loginSchema } from "@/lib/validations";
+import {
+  registerSchema,
+  loginSchema,
+  updateThemePreferenceSchema,
+  notificationPreferencesSchema,
+  onboardingSchema,
+} from "@/lib/validations";
 
 export async function POST(req: NextRequest) {
   try {
@@ -97,11 +103,36 @@ export async function PATCH(req: NextRequest) {
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const body = await req.json();
-    const { firstName, lastName } = body as { firstName?: string; lastName?: string };
+    const { firstName, lastName, themePreference } = body as {
+      firstName?: string;
+      lastName?: string;
+      themePreference?: string;
+    };
+    const notificationPrefs = notificationPreferencesSchema.parse(body);
+    const onboarding = onboardingSchema.parse(body);
 
-    const data: Record<string, string> = {};
+    const data: Record<string, unknown> = {};
     if (firstName?.trim()) data.firstName = firstName.trim();
     if (lastName?.trim()) data.lastName = lastName.trim();
+    if (themePreference) {
+      const parsedTheme = updateThemePreferenceSchema.parse({ themePreference });
+      data.themePreference = parsedTheme.themePreference;
+    }
+    if (notificationPrefs.emailNotificationsEnabled !== undefined) {
+      data.emailNotificationsEnabled = notificationPrefs.emailNotificationsEnabled;
+    }
+    if (notificationPrefs.emailOnMentions !== undefined) {
+      data.emailOnMentions = notificationPrefs.emailOnMentions;
+    }
+    if (notificationPrefs.emailOnAssignments !== undefined) {
+      data.emailOnAssignments = notificationPrefs.emailOnAssignments;
+    }
+    if (notificationPrefs.emailOnDueDates !== undefined) {
+      data.emailOnDueDates = notificationPrefs.emailOnDueDates;
+    }
+    if (onboarding.onboardingCompleted !== undefined) {
+      data.onboardingCompleted = onboarding.onboardingCompleted;
+    }
 
     if (Object.keys(data).length === 0) {
       return NextResponse.json({ error: "No fields to update" }, { status: 400 });
@@ -110,7 +141,19 @@ export async function PATCH(req: NextRequest) {
     const updated = await prisma.user.update({
       where: { id: user.id },
       data,
-      select: { id: true, email: true, firstName: true, lastName: true, role: true },
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        role: true,
+        themePreference: true,
+        emailNotificationsEnabled: true,
+        emailOnMentions: true,
+        emailOnAssignments: true,
+        emailOnDueDates: true,
+        onboardingCompleted: true,
+      },
     });
 
     return NextResponse.json({ user: updated });
