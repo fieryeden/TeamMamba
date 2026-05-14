@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getAuthUser } from "@/lib/session";
 import { hashPassword, verifyPassword, signToken } from "@/lib/auth";
 import { registerSchema, loginSchema } from "@/lib/validations";
 
@@ -85,6 +86,36 @@ export async function PUT(req: NextRequest) {
     return res;
   } catch (err: unknown) {
     console.error("Login error:", err);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+  }
+}
+
+// Update profile
+export async function PATCH(req: NextRequest) {
+  try {
+    const user = await getAuthUser();
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+    const body = await req.json();
+    const { firstName, lastName } = body as { firstName?: string; lastName?: string };
+
+    const data: Record<string, string> = {};
+    if (firstName?.trim()) data.firstName = firstName.trim();
+    if (lastName?.trim()) data.lastName = lastName.trim();
+
+    if (Object.keys(data).length === 0) {
+      return NextResponse.json({ error: "No fields to update" }, { status: 400 });
+    }
+
+    const updated = await prisma.user.update({
+      where: { id: user.id },
+      data,
+      select: { id: true, email: true, firstName: true, lastName: true, role: true },
+    });
+
+    return NextResponse.json({ user: updated });
+  } catch (err) {
+    console.error("Update profile error:", err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

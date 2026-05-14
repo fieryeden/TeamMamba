@@ -12,8 +12,14 @@ export default async function TeamPage() {
     include: {
       user: {
         select: {
-          id: true, firstName: true, lastName: true, email: true,
-          avatarUrl: true, role: true, status: true, lastLoginAt: true,
+          id: true,
+          firstName: true,
+          lastName: true,
+          email: true,
+          avatarUrl: true,
+          role: true,
+          status: true,
+          lastLoginAt: true,
         },
       },
       workspace: { select: { id: true, name: true } },
@@ -21,5 +27,14 @@ export default async function TeamPage() {
     orderBy: { joinedAt: "desc" },
   });
 
-  return <TeamClient currentUser={user} members={JSON.parse(JSON.stringify(workspaceMembers))} />;
+  // Map membership id to membershipId for the client
+  const members = workspaceMembers.map((m) => ({
+    membershipId: m.id,
+    user: m.user,
+    role: m.role,
+    workspace: m.workspace,
+    joinedAt: m.joinedAt.toISOString(),
+  }));
+
+  return <TeamClient currentUser={user} members={JSON.parse(JSON.stringify(members))} />;
 }
