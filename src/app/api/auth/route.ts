@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
     const res = NextResponse.json({ user, workspace, token }, { status: 201 });
     res.cookies.set("token", token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
+      secure: process.env.NODE_ENV === "production" && process.env.SECURE_COOKIES === "true",
       sameSite: "lax",
       maxAge: 60 * 60 * 24 * 7, // 7 days
       path: "/",
@@ -84,7 +84,7 @@ export async function PUT(req: NextRequest) {
     });
     res.cookies.set("token", token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
+      secure: process.env.NODE_ENV === "production" && process.env.SECURE_COOKIES === "true",
       sameSite: "lax",
       maxAge: 60 * 60 * 24 * 7,
       path: "/",

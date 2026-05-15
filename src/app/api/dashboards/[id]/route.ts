@@ -1,36 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getAuthUser } from "@/lib/session";
-import { fireWebhooks } from "@/lib/webhooks";
-import { createAuditLog } from "@/lib/audit";
-import { createGroupSchema, updateGroupSchema } from "@/lib/validations";
 
-export async function POST(req: NextRequest) {
+export async function GET(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
   try {
     const user = await getAuthUser();
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const body = await req.json();
-    const data = createGroupSchema.parse(body);
-
-    const maxPos = await prisma.group.findFirst({
-      where: { boardId: data.boardId },
-      orderBy: { position: "desc" },
-      select: { position: true },
+    const { id } = await params;
+    const dashboard = await prisma.dashboard.findUnique({
+      where: { id, ownerId: user.id },
+      include: { widgets: { orderBy: { order: "asc" } } },
     });
 
-    const group = await prisma.group.create({
-      data: {
-        boardId: data.boardId,
-        name: data.name,
-        color: data.color ?? "#579bfc",
-        position: (maxPos?.position ?? -1) + 1,
-      },
-    });
+    if (!dashboard) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-    return NextResponse.json({ group }, { status: 201 });
+    return NextResponse.json({ dashboard });
   } catch (err) {
-    console.error("Create group error:", err);
+    console.error("Get dashboard error:", err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
@@ -45,15 +35,20 @@ export async function PATCH(
 
     const { id } = await params;
     const body = await req.json();
+    const { name, description } = body;
 
-    const group = await prisma.group.update({
-      where: { id },
-      data: body,
+    const dashboard = await prisma.dashboard.update({
+      where: { id, ownerId: user.id },
+      data: {
+        ...(name !== undefined && { name }),
+        ...(description !== undefined && { description }),
+      },
+      include: { widgets: { orderBy: { order: "asc" } } },
     });
 
-    return NextResponse.json({ group });
+    return NextResponse.json({ dashboard });
   } catch (err) {
-    console.error("Update group error:", err);
+    console.error("Update dashboard error:", err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
@@ -67,11 +62,11 @@ export async function DELETE(
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const { id } = await params;
-    await prisma.group.delete({ where: { id } });
+    await prisma.dashboard.delete({ where: { id, ownerId: user.id } });
 
     return NextResponse.json({ success: true });
   } catch (err) {
-    console.error("Delete group error:", err);
+    console.error("Delete dashboard error:", err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

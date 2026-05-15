@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getAuthUser } from "@/lib/session";
+import { fireWebhooks } from "@/lib/webhooks";
+import { createAuditLog } from "@/lib/audit";
 import { createColumnSchema } from "@/lib/validations";
 
 export async function POST(req: NextRequest) {

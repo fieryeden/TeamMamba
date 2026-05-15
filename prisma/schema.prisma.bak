@@ -141,7 +141,6 @@ model Board {
   milestones  Milestone[]
   webhooks    Webhook[]
 
-  auditLogs   AuditLog[]
   @@map("boards")
 }
 
@@ -613,32 +612,26 @@ model Milestone {
 // ─── WEBHOOKS ───────────────────────────────────────────
 
 model Webhook {
-  id          String   @id @default(uuid())
+  id          String         @id @default(uuid())
   boardId     String
   url         String
-  secret      String   @default("")
-  description String?
-  events      String[] @default(["ITEM_CREATED", "ITEM_UPDATED", "ITEM_DELETED"])
-  isEnabled   Boolean  @default(true)
+  secret      String?
+  isEnabled   Boolean        @default(true)
   lastFiredAt DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  board       Board    @relation(fields: [boardId], references: [id], onDelete: Cascade)
-  deliveries  WebhookEvent[]
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  board       Board          @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  events      WebhookEvent[]
 
   @@map("webhooks")
 }
 
 model WebhookEvent {
-  id          String   @id @default(uuid())
-  webhookId   String
-  eventType   String
-  payload     Json?
-  statusCode  Int      @default(0)
-  success     Boolean  @default(false)
-  response    String?
-  createdAt   DateTime @default(now())
-  webhook     Webhook  @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+  id        String   @id @default(uuid())
+  webhookId String
+  event     String
+  createdAt DateTime @default(now())
+  webhook   Webhook  @relation(fields: [webhookId], references: [id], onDelete: Cascade)
 
   @@map("webhook_events")
 }
@@ -646,17 +639,16 @@ model WebhookEvent {
 // ─── AUDIT LOGS ─────────────────────────────────────────
 
 model AuditLog {
-  id        String   @id @default(uuid())
-  userId    String
-  action    String
-  boardId   String?
-  itemId    String?
-  details   Json?
-  ipAddress String?
-  userAgent String?
-  createdAt DateTime @default(now())
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  board     Board?   @relation(fields: [boardId], references: [id], onDelete: SetNull)
+  id         String   @id @default(uuid())
+  userId     String
+  action     String
+  resource   String
+  resourceId String
+  details    Json?
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("audit_logs")
 }

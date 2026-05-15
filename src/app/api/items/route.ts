@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getAuthUser } from "@/lib/session";
 import { createItemSchema, updateItemSchema } from "@/lib/validations";
+import { fireWebhooks } from "@/lib/webhooks";
+import { createAuditLog } from "@/lib/audit";
 
 export async function GET(req: NextRequest) {
   try {
@@ -83,6 +85,12 @@ export async function POST(req: NextRequest) {
         details: { itemName: data.name },
       },
     });
+
+    // Fire webhooks (non-blocking)
+    fireWebhooks({ event: "ITEM_CREATED", boardId: data.boardId, itemId: item.id, userId: user.id, payload: { name: data.name } });
+
+    // Audit log (non-blocking)
+    createAuditLog({ action: "ITEM_CREATED", boardId: data.boardId, itemId: item.id, userId: user.id, details: { itemName: data.name } });
 
     return NextResponse.json({ item }, { status: 201 });
   } catch (err) {

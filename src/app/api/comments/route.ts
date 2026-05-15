@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getAuthUser } from "@/lib/session";
+import { fireWebhooks } from "@/lib/webhooks";
+import { createAuditLog } from "@/lib/audit";
 import { createItemCommentSchema } from "@/lib/validations";
 import { broadcastToBoard } from "@/lib/socket";
 import { sendEmail } from "@/lib/mailer";

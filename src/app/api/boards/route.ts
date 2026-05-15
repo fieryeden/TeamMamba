@@ -3,6 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { getAuthUser } from "@/lib/session";
 import { createBoardSchema, updateBoardSchema } from "@/lib/validations";
 import { getBoardTemplate } from "@/lib/board-templates";
+import { fireWebhooks } from "@/lib/webhooks";
+import { createAuditLog } from "@/lib/audit";
 
 export async function GET(req: NextRequest) {
   try {
@@ -16,8 +18,24 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "workspaceId required" }, { status: 400 });
     }
 
+    // Get user's board IDs in this workspace (for private board visibility)
+    const userBoardMemberships = await prisma.boardMember.findMany({
+      where: {
+        userId: user.id,
+        board: { workspaceId },
+      },
+      select: { boardId: true },
+    });
+    const memberBoardIds = new Set(userBoardMemberships.map((m) => m.boardId));
+
     const boards = await prisma.board.findMany({
-      where: { workspaceId },
+      where: {
+        workspaceId,
+        OR: [
+          { boardKind: { not: "PRIVATE" } }, // Non-private boards visible to all workspace members
+          { id: { in: Array.from(memberBoardIds) } }, // Private boards only if member
+        ],
+      },
       include: {
         columns: { orderBy: { order: "asc" } },
         groups: { orderBy: { position: "asc" } },
@@ -43,12 +61,27 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json();
     const data = createBoardSchema.parse(body);
+
     const template = getBoardTemplate(data.templateKey);
     const templateColumns = template?.columns ?? [
-      { title: "Status", columnType: "STATUS", config: { labels: ["Not Started", "Working on it", "Done", "Stuck"], colors: ["#c4c4c4", "#fdab3d", "#00c875", "#e2445c"] } },
+      {
+        title: "Status",
+        columnType: "STATUS",
+        config: {
+          labels: ["Not Started", "Working on it", "Done", "Stuck"],
+          colors: ["#c4c4c4", "#fdab3d", "#00c875", "#e2445c"],
+        },
+      },
       { title: "People", columnType: "PEOPLE" },
       { title: "Date", columnType: "DATE" },
-      { title: "Priority", columnType: "STATUS", config: { labels: ["Critical", "High", "Medium", "Low"], colors: ["#333333", "#e2445c", "#fdab3d", "#579bfc"] } },
+      {
+        title: "Priority",
+        columnType: "STATUS",
+        config: {
+          labels: ["Critical", "High", "Medium", "Low"],
+          colors: ["#333333", "#e2445c", "#fdab3d", "#579bfc"],
+        },
+      },
     ];
     const templateGroups = template?.groups ?? [{ name: "Group 1", color: "#579bfc" }];
 
@@ -79,7 +112,9 @@ export async function POST(req: NextRequest) {
             })),
           },
         },
-        members: { create: { userId: user.id, role: "OWNER" } },
+        members: {
+          create: { userId: user.id, role: "OWNER" },
+        },
       },
       include: {
         columns: { orderBy: { order: "asc" } },
@@ -93,9 +128,17 @@ export async function POST(req: NextRequest) {
         boardId: board.id,
         userId: user.id,
         action: "BOARD_CREATED",
-        details: { boardName: data.name },
+        details: {
+          boardName: data.name,
+          boardKind: data.boardKind,
+          isPrivate: (data.boardKind as string) === "PRIVATE",
+        },
       },
     });
+
+    // Fire webhooks + audit log
+    fireWebhooks({ event: "BOARD_CREATED", boardId: board.id, userId: user.id, payload: { name: data.name } });
+    createAuditLog({ action: "BOARD_CREATED", boardId: board.id, userId: user.id, details: { boardName: data.name } });
 
     return NextResponse.json({ board }, { status: 201 });
   } catch (err) {

@@ -4,12 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
-  LayoutDashboard,
-  FolderKanban,
-  Settings,
-  Zap,
-  Bell,
-  Users,
+  LayoutDashboard, FolderKanban, Settings, Zap, Bell, Users,
+  BarChart3, FileText, Webhook,
 } from "lucide-react";
 
 interface SidebarProps {
@@ -30,8 +26,12 @@ export function DashboardSidebar({ user, className, onNavigate }: SidebarProps) 
 
   const navItems = [
     { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { href: "/insights", label: "Insights", icon: BarChart3 },
     { href: "/workspaces", label: "Workspaces", icon: FolderKanban },
+    { href: "/workload", label: "Workload", icon: Users },
+    { href: "/docs", label: "Docs", icon: FileText },
     { href: "/automations", label: "Automations", icon: Zap },
+    { href: "/webhooks", label: "Webhooks", icon: Webhook },
     { href: "/team", label: "Team", icon: Users },
     { href: "/notifications", label: "Notifications", icon: Bell },
     { href: "/settings", label: "Settings", icon: Settings },
@@ -42,7 +42,9 @@ export function DashboardSidebar({ user, className, onNavigate }: SidebarProps) 
     if (href === "/workspaces") {
       return pathname === "/workspaces" || pathname.startsWith("/workspace/");
     }
-    return pathname === href;
+    if (href === "/insights") return pathname === "/insights" || pathname.startsWith("/insights/");
+    if (href === "/docs") return pathname === "/docs" || pathname.startsWith("/docs/");
+    return pathname === href || pathname.startsWith(href + "/");
   };
 
   return (

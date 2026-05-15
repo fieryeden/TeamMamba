@@ -44,6 +44,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn, formatRelativeTime } from "@/lib/utils";
 
@@ -136,7 +137,12 @@ interface SavedBoardView {
   id: string;
   name: string;
   viewKind: ViewMode;
-  config: { sortState?: SortState; collapsedGroups?: string[] } | null;
+  config: {
+    sortState?: SortState;
+    collapsedGroups?: string[];
+    filters?: FilterState[];
+    searchQuery?: string;
+  } | null;
 }
 
 interface BoardClientProps {
@@ -157,6 +163,126 @@ interface BoardClientProps {
 
 type ViewMode = "TABLE" | "KANBAN" | "CALENDAR" | "TIMELINE";
 type SortState = { columnId: string; direction: "asc" | "desc" } | null;
+type FilterOperator =
+  | "is"
+  | "is_not"
+  | "contains"
+  | "not_contains"
+  | "is_empty"
+  | "is_not_empty"
+  | "eq"
+  | "neq"
+  | "gt"
+  | "lt"
+  | "gte"
+  | "lte"
+  | "is_before"
+  | "is_after"
+  | "is_between"
+  | "is_checked"
+  | "is_not_checked";
+
+interface FilterState {
+  id: string;
+  columnId: string;
+  operator: FilterOperator;
+  value: string;
+  valueTo?: string;
+}
+
+interface FilterOperatorOption {
+  value: FilterOperator;
+  label: string;
+  needsValue?: boolean;
+  needsSecondValue?: boolean;
+}
+
+const textOperators: FilterOperatorOption[] = [
+  { value: "is", label: "is", needsValue: true },
+  { value: "is_not", label: "is not", needsValue: true },
+  { value: "contains", label: "contains", needsValue: true },
+  { value: "not_contains", label: "doesn't contain", needsValue: true },
+  { value: "is_empty", label: "is empty" },
+  { value: "is_not_empty", label: "is not empty" },
+];
+
+const numberOperators: FilterOperatorOption[] = [
+  { value: "eq", label: "=", needsValue: true },
+  { value: "neq", label: "≠", needsValue: true },
+  { value: "gt", label: ">", needsValue: true },
+  { value: "lt", label: "<", needsValue: true },
+  { value: "gte", label: "≥", needsValue: true },
+  { value: "lte", label: "≤", needsValue: true },
+  { value: "is_empty", label: "is empty" },
+  { value: "is_not_empty", label: "is not empty" },
+];
+
+const dateOperators: FilterOperatorOption[] = [
+  { value: "is", label: "is", needsValue: true },
+  { value: "is_before", label: "is before", needsValue: true },
+  { value: "is_after", label: "is after", needsValue: true },
+  { value: "is_between", label: "is between", needsValue: true, needsSecondValue: true },
+  { value: "is_empty", label: "is empty" },
+  { value: "is_not_empty", label: "is not empty" },
+];
+
+const checkboxOperators: FilterOperatorOption[] = [
+  { value: "is_checked", label: "is checked" },
+  { value: "is_not_checked", label: "is not checked" },
+];
+
+function getFilterOperators(columnType: string): FilterOperatorOption[] {
+  if (columnType === "STATUS" || columnType === "PEOPLE") {
+    return [
+      { value: "is", label: "is", needsValue: true },
+      { value: "is_not", label: "is not", needsValue: true },
+    ];
+  }
+  if (columnType === "NUMBER" || columnType === "PROGRESS" || columnType === "RATING") {
+    return numberOperators;
+  }
+  if (columnType === "DATE" || columnType === "TIMELINE") {
+    return dateOperators;
+  }
+  if (columnType === "CHECKBOX") {
+    return checkboxOperators;
+  }
+  if (columnType === "TAGS") {
+    return [
+      { value: "contains", label: "contains", needsValue: true },
+      { value: "not_contains", label: "doesn't contain", needsValue: true },
+    ];
+  }
+  return textOperators;
+}
+
+function getDefaultFilter(columnId: string, columnType: string): FilterState {
+  const operator = getFilterOperators(columnType)[0]?.value ?? "contains";
+  return { id: crypto.randomUUID(), columnId, operator, value: "" };
+}
+
+function getTimelineRange(value: unknown): { start: Date; end: Date } | null {
+  if (!value || typeof value !== "object") return null;
+  const entry = value as Record<string, unknown>;
+  const startRaw = entry.start ?? entry.from;
+  const endRaw = entry.end ?? entry.to;
+  if (typeof startRaw !== "string" || typeof endRaw !== "string") return null;
+  const start = new Date(startRaw);
+  const end = new Date(endRaw);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
+  return start <= end ? { start, end } : { start: end, end: start };
+}
+
+function toDateKey(value: Date) {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
+}
+
+function asString(value: unknown): string {
+  if (value == null) return "";
+  if (Array.isArray(value)) return value.join(", ");
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
 
 function getStatusMeta(column: Column | ColumnValue["column"]) {
   const config = column.config as { labels?: string[]; colors?: string[] } | null;
@@ -226,11 +352,145 @@ export function BoardClient({ user, board }: BoardClientProps) {
   });
   const [savedViews, setSavedViews] = useState<SavedBoardView[]>([]);
   const [selectedViewId, setSelectedViewId] = useState("");
+  const [filters, setFilters] = useState<FilterState[]>([]);
+  const [searchQuery, setSearchQuery] = useState("");
 
   const resizeRef = useRef<{ columnId: string; startX: number; startWidth: number } | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
 
   const allItems = useMemo(() => groups.flatMap((group) => group.items), [groups]);
+  const normalizedSearchQuery = searchQuery.trim().toLowerCase();
+
+  const isFilterActive = useCallback((filter: FilterState) => {
+    const column = columns.find((entry) => entry.id === filter.columnId);
+    if (!column) return false;
+    const operator = getFilterOperators(column.columnType).find((entry) => entry.value === filter.operator);
+    if (!operator) return false;
+    if (operator.needsValue && !filter.value.trim()) return false;
+    if (operator.needsSecondValue && !filter.valueTo?.trim()) return false;
+    return true;
+  }, [columns]);
+
+  const activeFilters = useMemo(
+    () => filters.filter((filter) => isFilterActive(filter)),
+    [filters, isFilterActive]
+  );
+
+  const matchesSearch = useCallback((item: Item) => {
+    if (!normalizedSearchQuery) return true;
+    return item.name.toLowerCase().includes(normalizedSearchQuery);
+  }, [normalizedSearchQuery]);
+
+  const matchesFilter = useCallback((item: Item, filter: FilterState) => {
+    const column = columns.find((entry) => entry.id === filter.columnId);
+    if (!column) return true;
+    const cv = item.columnValues.find((entry) => entry.column.id === column.id);
+    const value = cv?.value;
+    const textValue = asString(value).toLowerCase();
+    const rawFilterValue = filter.value.trim();
+    const filterText = rawFilterValue.toLowerCase();
+
+    if (filter.operator === "is_empty") {
+      if (column.columnType === "PEOPLE") return item.assignees.length === 0;
+      if (column.columnType === "CHECKBOX") return value == null;
+      return value == null || asString(value).trim() === "" || (Array.isArray(value) && value.length === 0);
+    }
+    if (filter.operator === "is_not_empty") {
+      if (column.columnType === "PEOPLE") return item.assignees.length > 0;
+      if (column.columnType === "CHECKBOX") return value != null;
+      return !(value == null || asString(value).trim() === "" || (Array.isArray(value) && value.length === 0));
+    }
+
+    if (column.columnType === "CHECKBOX") {
+      const checked = Boolean(value);
+      return filter.operator === "is_checked" ? checked : !checked;
+    }
+
+    if (column.columnType === "PEOPLE") {
+      const hasUser = item.assignees.some((assignee) => assignee.user.id === rawFilterValue);
+      return filter.operator === "is" ? hasUser : !hasUser;
+    }
+
+    if (column.columnType === "STATUS") {
+      const statusIndex = typeof value === "number" ? String(value) : "0";
+      return filter.operator === "is" ? statusIndex === rawFilterValue : statusIndex !== rawFilterValue;
+    }
+
+    if (column.columnType === "NUMBER" || column.columnType === "PROGRESS" || column.columnType === "RATING") {
+      const numericValue = typeof value === "number" ? value : Number(value);
+      const filterNumber = Number(rawFilterValue);
+      if (Number.isNaN(numericValue) || Number.isNaN(filterNumber)) return false;
+      if (filter.operator === "eq") return numericValue === filterNumber;
+      if (filter.operator === "neq") return numericValue !== filterNumber;
+      if (filter.operator === "gt") return numericValue > filterNumber;
+      if (filter.operator === "lt") return numericValue < filterNumber;
+      if (filter.operator === "gte") return numericValue >= filterNumber;
+      if (filter.operator === "lte") return numericValue <= filterNumber;
+      return true;
+    }
+
+    if (column.columnType === "DATE" || column.columnType === "TIMELINE") {
+      const filterDate = rawFilterValue ? new Date(rawFilterValue) : null;
+      const filterDateTo = filter.valueTo ? new Date(filter.valueTo) : null;
+      if ((filterDate && Number.isNaN(filterDate.getTime())) || (filterDateTo && Number.isNaN(filterDateTo.getTime()))) {
+        return false;
+      }
+
+      if (column.columnType === "TIMELINE") {
+        const range = getTimelineRange(value);
+        if (!range) return false;
+        const startKey = toDateKey(range.start);
+        const endKey = toDateKey(range.end);
+        const targetKey = filterDate ? toDateKey(filterDate) : 0;
+        if (filter.operator === "is") return startKey === targetKey || endKey === targetKey;
+        if (filter.operator === "is_before") return endKey < targetKey;
+        if (filter.operator === "is_after") return startKey > targetKey;
+        if (filter.operator === "is_between" && filterDate && filterDateTo) {
+          const from = Math.min(toDateKey(filterDate), toDateKey(filterDateTo));
+          const to = Math.max(toDateKey(filterDate), toDateKey(filterDateTo));
+          return startKey <= to && endKey >= from;
+        }
+        return true;
+      }
+
+      if (typeof value !== "string") return false;
+      const itemDate = new Date(value);
+      if (Number.isNaN(itemDate.getTime())) return false;
+      const itemKey = toDateKey(itemDate);
+      const targetKey = filterDate ? toDateKey(filterDate) : 0;
+      if (filter.operator === "is") return itemKey === targetKey;
+      if (filter.operator === "is_before") return itemKey < targetKey;
+      if (filter.operator === "is_after") return itemKey > targetKey;
+      if (filter.operator === "is_between" && filterDate && filterDateTo) {
+        const from = Math.min(toDateKey(filterDate), toDateKey(filterDateTo));
+        const to = Math.max(toDateKey(filterDate), toDateKey(filterDateTo));
+        return itemKey >= from && itemKey <= to;
+      }
+      return true;
+    }
+
+    if (column.columnType === "TAGS") {
+      const tags = Array.isArray(value) ? value.map((entry) => String(entry).toLowerCase()) : [];
+      const contains = tags.some((tag) => tag.includes(filterText));
+      return filter.operator === "contains" ? contains : !contains;
+    }
+
+    if (filter.operator === "is") return textValue === filterText;
+    if (filter.operator === "is_not") return textValue !== filterText;
+    if (filter.operator === "contains") return textValue.includes(filterText);
+    if (filter.operator === "not_contains") return !textValue.includes(filterText);
+    return true;
+  }, [columns]);
+
+  const filteredGroups = useMemo(() => {
+    return groups.map((group) => ({
+      ...group,
+      items: group.items.filter((item) => {
+        if (!matchesSearch(item)) return false;
+        return activeFilters.every((filter) => matchesFilter(item, filter));
+      }),
+    }));
+  }, [activeFilters, groups, matchesFilter, matchesSearch]);
 
   const selectedItem = useMemo(() => {
     if (!selectedItemId) return null;
@@ -350,7 +610,7 @@ export function BoardClient({ user, board }: BoardClientProps) {
   }, [logActivity]);
 
   const createItemInGroup = useCallback(async (groupId: string, name: string) => {
-    if (!name) return;
+    if (!name) return null;
 
     try {
       const res = await fetch("/api/items", {
@@ -361,31 +621,31 @@ export function BoardClient({ user, board }: BoardClientProps) {
       const data = await res.json();
 
       if (res.ok) {
+        const createdItem: Item = {
+          ...data.item,
+          _count: data.item._count ?? { comments: 0, subitems: 0 },
+          comments: [],
+          updates: [],
+          activities: [],
+          timeEntries: [],
+          subitems: [],
+        };
         setGroups((prev) =>
           prev.map((group) =>
             group.id === groupId
               ? {
                   ...group,
-                  items: [
-                    ...group.items,
-                    {
-                      ...data.item,
-                      _count: data.item._count ?? { comments: 0, subitems: 0 },
-                      comments: [],
-                      updates: [],
-                      activities: [],
-                      timeEntries: [],
-                      subitems: [],
-                    },
-                  ],
+                  items: [...group.items, createdItem],
                 }
               : group
           )
         );
+        return createdItem;
       }
     } catch (err) {
       console.error("Failed to create item:", err);
     }
+    return null;
   }, [board.id]);
 
   const handleAddItem = useCallback(async (groupId: string) => {
@@ -395,6 +655,18 @@ export function BoardClient({ user, board }: BoardClientProps) {
     setNewItemName((prev) => ({ ...prev, [groupId]: "" }));
     setShowNewItem((prev) => ({ ...prev, [groupId]: false }));
   }, [createItemInGroup, newItemName]);
+
+  const handleCreateKanbanItem = useCallback(async (statusIndex: number) => {
+    const targetGroup = groups[0];
+    if (!targetGroup) return;
+    const createdItem = await createItemInGroup(targetGroup.id, "New Item");
+    if (!createdItem) return;
+    const statusColumn = columns.find((column) => column.columnType === "STATUS");
+    if (!statusColumn) return;
+    const statusCv = createdItem.columnValues.find((value) => value.column.id === statusColumn.id);
+    if (!statusCv) return;
+    handleUpdateValue(statusCv.id, statusIndex);
+  }, [columns, createItemInGroup, groups, handleUpdateValue]);
 
   const handleAddGroup = useCallback(async () => {
     const name = newGroupName.trim();
@@ -602,6 +874,8 @@ export function BoardClient({ user, board }: BoardClientProps) {
       config: {
         sortState,
         collapsedGroups: groups.filter((group) => group.isCollapsed).map((group) => group.id),
+        filters,
+        searchQuery,
       },
     };
     const res = await fetch("/api/board-views", {
@@ -621,6 +895,8 @@ export function BoardClient({ user, board }: BoardClientProps) {
     if (!view) return;
     setViewMode(view.viewKind);
     setSortState(view.config?.sortState ?? null);
+    setFilters(view.config?.filters ?? []);
+    setSearchQuery(view.config?.searchQuery ?? "");
     const collapsed = new Set(view.config?.collapsedGroups ?? []);
     setGroups((prev) =>
       prev.map((group) => ({
@@ -689,6 +965,16 @@ export function BoardClient({ user, board }: BoardClientProps) {
     return () => window.removeEventListener("tm:new-item", onQuickNewItem as EventListener);
   }, [createItemInGroup, groups]);
 
+  const addFilterRow = useCallback(() => {
+    const firstColumn = columns[0];
+    if (!firstColumn) return;
+    setFilters((prev) => [...prev, getDefaultFilter(firstColumn.id, firstColumn.columnType)]);
+  }, [columns]);
+
+  const updateFilterRow = useCallback((filterId: string, patch: Partial<FilterState>) => {
+    setFilters((prev) => prev.map((filter) => (filter.id === filterId ? { ...filter, ...patch } : filter)));
+  }, []);
+
   return (
     <div className="flex h-full flex-col">
       <div className="border-b bg-card px-4 py-3">
@@ -725,9 +1011,147 @@ export function BoardClient({ user, board }: BoardClientProps) {
               </TabsList>
             </Tabs>
 
-            <Button variant="ghost" size="sm" className="h-8">
-              <Filter className="mr-1 h-3.5 w-3.5" /> Filter
-            </Button>
+            <Input
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search items"
+              className="h-8 w-52 text-xs"
+            />
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button variant="ghost" size="sm" className="h-8">
+                  <Filter className="mr-1 h-3.5 w-3.5" /> Filter
+                  {activeFilters.length > 0 && (
+                    <Badge variant="secondary" className="ml-1 rounded-full px-1.5 py-0 text-[10px]">
+                      {activeFilters.length}
+                    </Badge>
+                  )}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="start" className="w-[560px] space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-semibold">Filters (AND)</p>
+                  <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setFilters([])}>
+                    Clear all
+                  </Button>
+                </div>
+
+                {filters.length === 0 && (
+                  <p className="text-xs text-muted-foreground">No filters yet.</p>
+                )}
+
+                {filters.map((filter) => {
+                  const selectedColumn = columns.find((column) => column.id === filter.columnId) ?? columns[0];
+                  if (!selectedColumn) return null;
+                  const operators = getFilterOperators(selectedColumn.columnType);
+                  const operator = operators.find((entry) => entry.value === filter.operator) ?? operators[0];
+                  const needsValue = Boolean(operator?.needsValue);
+                  const needsSecond = Boolean(operator?.needsSecondValue);
+                  const statusMeta = getStatusMeta(selectedColumn);
+                  const isDate = selectedColumn.columnType === "DATE" || selectedColumn.columnType === "TIMELINE";
+
+                  return (
+                    <div key={filter.id} className="grid grid-cols-[1fr_0.8fr_1fr_auto] items-center gap-2">
+                      <select
+                        className="h-8 rounded-md border bg-background px-2 text-xs"
+                        value={selectedColumn.id}
+                        onChange={(event) => {
+                          const nextColumn = columns.find((column) => column.id === event.target.value);
+                          if (!nextColumn) return;
+                          const nextDefault = getDefaultFilter(nextColumn.id, nextColumn.columnType);
+                          updateFilterRow(filter.id, {
+                            columnId: nextDefault.columnId,
+                            operator: nextDefault.operator,
+                            value: "",
+                            valueTo: "",
+                          });
+                        }}
+                      >
+                        {columns.map((column) => (
+                          <option key={column.id} value={column.id}>
+                            {column.title}
+                          </option>
+                        ))}
+                      </select>
+
+                      <select
+                        className="h-8 rounded-md border bg-background px-2 text-xs"
+                        value={filter.operator}
+                        onChange={(event) => updateFilterRow(filter.id, { operator: event.target.value as FilterOperator })}
+                      >
+                        {operators.map((entry) => (
+                          <option key={`${selectedColumn.id}-${entry.value}`} value={entry.value}>
+                            {entry.label}
+                          </option>
+                        ))}
+                      </select>
+
+                      {needsValue ? (
+                        selectedColumn.columnType === "STATUS" ? (
+                          <select
+                            className="h-8 rounded-md border bg-background px-2 text-xs"
+                            value={filter.value}
+                            onChange={(event) => updateFilterRow(filter.id, { value: event.target.value })}
+                          >
+                            <option value="">Select status</option>
+                            {statusMeta.labels.map((label, index) => (
+                              <option key={`${selectedColumn.id}-status-${label}`} value={String(index)}>
+                                {label}
+                              </option>
+                            ))}
+                          </select>
+                        ) : selectedColumn.columnType === "PEOPLE" ? (
+                          <select
+                            className="h-8 rounded-md border bg-background px-2 text-xs"
+                            value={filter.value}
+                            onChange={(event) => updateFilterRow(filter.id, { value: event.target.value })}
+                          >
+                            <option value="">Select member</option>
+                            {board.members.map((member) => (
+                              <option key={member.user.id} value={member.user.id}>
+                                {member.user.firstName} {member.user.lastName}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <div className="flex items-center gap-1">
+                            <Input
+                              type={isDate ? "date" : selectedColumn.columnType === "NUMBER" || selectedColumn.columnType === "PROGRESS" || selectedColumn.columnType === "RATING" ? "number" : "text"}
+                              value={filter.value}
+                              onChange={(event) => updateFilterRow(filter.id, { value: event.target.value })}
+                              className="h-8 text-xs"
+                            />
+                            {needsSecond && (
+                              <Input
+                                type="date"
+                                value={filter.valueTo ?? ""}
+                                onChange={(event) => updateFilterRow(filter.id, { valueTo: event.target.value })}
+                                className="h-8 text-xs"
+                              />
+                            )}
+                          </div>
+                        )
+                      ) : (
+                        <div className="text-xs text-muted-foreground">No value needed</div>
+                      )}
+
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8"
+                        onClick={() => setFilters((prev) => prev.filter((entry) => entry.id !== filter.id))}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  );
+                })}
+
+                <Button size="sm" variant="outline" className="h-8 text-xs" onClick={addFilterRow}>
+                  <Plus className="mr-1 h-3 w-3" /> Add filter
+                </Button>
+              </PopoverContent>
+            </Popover>
             <select
               className="h-8 rounded-md border bg-background px-2 text-xs"
               value={selectedViewId}
@@ -787,7 +1211,7 @@ export function BoardClient({ user, board }: BoardClientProps) {
       <div className="flex-1 overflow-hidden">
         {viewMode === "TABLE" && (
           <TableView
-            groups={groups}
+            groups={filteredGroups}
             columns={columns}
             sortState={sortState}
             getSortedItems={getSortedItems}
@@ -807,6 +1231,7 @@ export function BoardClient({ user, board }: BoardClientProps) {
             onDeleteItem={handleDeleteItem}
             onSelectItem={(itemId) => setSelectedItemId(itemId)}
             expandedSubitems={expandedSubitems}
+            searchQuery={normalizedSearchQuery}
             onToggleSubitems={(itemId) =>
               setExpandedSubitems((prev) => ({ ...prev, [itemId]: !prev[itemId] }))
             }
@@ -815,22 +1240,27 @@ export function BoardClient({ user, board }: BoardClientProps) {
 
         {viewMode === "KANBAN" && (
           <KanbanView
-            groups={groups}
+            groups={filteredGroups}
             columns={columns}
             onCycleStatus={handleCycleStatus}
             onUpdateValue={handleUpdateValue}
+            onCreateItemInLane={handleCreateKanbanItem}
+            searchQuery={normalizedSearchQuery}
             onSelectItem={(itemId) => setSelectedItemId(itemId)}
           />
         )}
 
-        {viewMode === "TIMELINE" && <TimelineView groups={groups} columns={columns} />}
+        {viewMode === "TIMELINE" && (
+          <TimelineView groups={filteredGroups} columns={columns} searchQuery={normalizedSearchQuery} />
+        )}
 
         {viewMode === "CALENDAR" && (
           <CalendarView
             month={calendarMonth}
             onChangeMonth={setCalendarMonth}
-            groups={groups}
+            groups={filteredGroups}
             columns={columns}
+            searchQuery={normalizedSearchQuery}
             onSelectItem={(itemId) => setSelectedItemId(itemId)}
           />
         )}
@@ -922,12 +1352,14 @@ function CalendarView({
   onChangeMonth,
   groups,
   columns,
+  searchQuery,
   onSelectItem,
 }: {
   month: Date;
   onChangeMonth: (month: Date) => void;
   groups: Group[];
   columns: Column[];
+  searchQuery: string;
   onSelectItem: (itemId: string) => void;
 }) {
   const dateColumn = columns.find((column) => column.columnType === "DATE");
@@ -1018,7 +1450,10 @@ function CalendarView({
                   <button
                     key={item.id}
                     onClick={() => onSelectItem(item.id)}
-                    className="block w-full truncate rounded bg-mamba-100 px-1.5 py-0.5 text-left text-[10px] text-mamba-800 hover:bg-mamba-200"
+                    className={cn(
+                      "block w-full truncate rounded bg-mamba-100 px-1.5 py-0.5 text-left text-[10px] text-mamba-800 hover:bg-mamba-200",
+                      searchQuery && "ring-1 ring-mamba-400"
+                    )}
                     title={`${item.name} • ${item.groupName}`}
                   >
                     {item.name}
@@ -1055,6 +1490,7 @@ function TableView({
   onDeleteItem,
   onSelectItem,
   expandedSubitems,
+  searchQuery,
   onToggleSubitems,
 }: {
   groups: Group[];
@@ -1075,6 +1511,7 @@ function TableView({
   onDeleteItem: (itemId: string, groupId: string) => void;
   onSelectItem: (itemId: string) => void;
   expandedSubitems: Record<string, boolean>;
+  searchQuery: string;
   onToggleSubitems: (itemId: string) => void;
 }) {
   return (
@@ -1133,6 +1570,7 @@ function TableView({
               onDeleteItem={onDeleteItem}
               onSelectItem={onSelectItem}
               expandedSubitems={expandedSubitems}
+              searchQuery={searchQuery}
               onToggleSubitems={onToggleSubitems}
             />
           ))}
@@ -1158,6 +1596,7 @@ function GroupRows({
   onDeleteItem,
   onSelectItem,
   expandedSubitems,
+  searchQuery,
   onToggleSubitems,
 }: {
   group: Group;
@@ -1175,6 +1614,7 @@ function GroupRows({
   onDeleteItem: (itemId: string, groupId: string) => void;
   onSelectItem: (itemId: string) => void;
   expandedSubitems: Record<string, boolean>;
+  searchQuery: string;
   onToggleSubitems: (itemId: string) => void;
 }) {
   const statusColumn = columns.find((column) => column.columnType === "STATUS");
@@ -1204,7 +1644,11 @@ function GroupRows({
       </tr>
 
       {!group.isCollapsed && sortedItems.map((item) => (
-        <tr key={item.id} className="item-row" onClick={() => onSelectItem(item.id)}>
+        <tr
+          key={item.id}
+          className={cn("item-row", searchQuery && "bg-mamba-50/35")}
+          onClick={() => onSelectItem(item.id)}
+        >
           <td className="w-10 px-2">
             <input type="checkbox" className="h-3.5 w-3.5 rounded border-muted-foreground/40" />
           </td>
@@ -1226,7 +1670,9 @@ function GroupRows({
                 </button>
               )}
               <GripVertical className="h-3.5 w-3.5 text-muted-foreground/40" />
-              <span className="text-sm font-medium">{item.name}</span>
+              <span className={cn("text-sm font-medium", searchQuery && "rounded bg-mamba-100 px-1 py-0.5")}>
+                {item.name}
+              </span>
               {item._count.comments > 0 && (
                 <Badge variant="secondary" className="rounded-full px-2 py-0 text-[10px]">
                   {item._count.comments} updates
@@ -1260,6 +1706,7 @@ function GroupRows({
                 onCycleStatus={onCycleStatus}
                 onUpdateValue={onUpdateValue}
                 onUploadFile={onUploadFile}
+                onSelectItem={onSelectItem}
               />
             </td>
           ))}
@@ -1365,14 +1812,33 @@ function CellRenderer({
   onCycleStatus,
   onUpdateValue,
   onUploadFile,
+  onSelectItem,
 }: {
   item: Item;
   column: Column;
   onCycleStatus: (itemId: string, cv: ColumnValue) => void;
   onUpdateValue: (valueId: string, value: unknown) => void;
   onUploadFile: (itemId: string, columnId: string, file: File) => void;
+  onSelectItem: (itemId: string) => void;
 }) {
   const cv = item.columnValues.find((value) => value.column.id === column.id);
+  const rawValue = cv?.value;
+
+  if (column.columnType === "ITEM_ID") {
+    return <span className="text-xs font-mono text-muted-foreground">{item.id.slice(0, 8)}</span>;
+  }
+
+  if (column.columnType === "TIME_TRACKING") {
+    const total = (item.timeEntries ?? []).reduce((acc, entry) => {
+      if (entry.isRunning) {
+        const running = Math.max(0, Math.round((Date.now() - new Date(entry.startTime).getTime()) / 1000));
+        return acc + entry.durationSeconds + running;
+      }
+      return acc + entry.durationSeconds;
+    }, 0);
+    return <span className="text-xs font-medium text-mamba-700">{formatDuration(total)}</span>;
+  }
+
   if (!cv) return <span className="text-xs text-muted-foreground">-</span>;
 
   if (column.columnType === "STATUS") {
@@ -1489,6 +1955,178 @@ function CellRenderer({
     );
   }
 
+  if (column.columnType === "RATING") {
+    const rating = Math.max(0, Math.min(5, Number(rawValue) || 0));
+    return (
+      <div className="flex items-center gap-0.5">
+        {Array.from({ length: 5 }, (_, index) => {
+          const value = index + 1;
+          return (
+            <button
+              key={`${cv.id}-star-${value}`}
+              className={cn("text-sm", value <= rating ? "text-yellow-500" : "text-muted-foreground/40")}
+              onClick={() => onUpdateValue(cv.id, value)}
+            >
+              ★
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
+
+  if (column.columnType === "EMAIL") {
+    const email = asString(rawValue).trim();
+    if (!email) return <span className="text-xs text-muted-foreground">-</span>;
+    return <a href={`mailto:${email}`} className="text-xs text-mamba-700 hover:underline">{email}</a>;
+  }
+
+  if (column.columnType === "PHONE") {
+    const phone = asString(rawValue).trim();
+    if (!phone) return <span className="text-xs text-muted-foreground">-</span>;
+    return <a href={`tel:${phone}`} className="text-xs text-mamba-700 hover:underline">{phone}</a>;
+  }
+
+  if (column.columnType === "LINK" || column.columnType === "FORM_LINK") {
+    const url = asString(rawValue).trim();
+    if (!url) return <span className="text-xs text-muted-foreground">-</span>;
+    const href = /^https?:\/\//.test(url) ? url : `https://${url}`;
+    return (
+      <a href={href} target="_blank" rel="noreferrer" className="block truncate text-xs text-mamba-700 hover:underline">
+        {url}
+      </a>
+    );
+  }
+
+  if (column.columnType === "COLOR") {
+    const color = typeof rawValue === "string" && rawValue ? rawValue : "#22c55e";
+    return (
+      <div className="flex items-center gap-2">
+        <span className="h-4 w-4 rounded border" style={{ backgroundColor: color }} />
+        <input
+          type="color"
+          defaultValue={color}
+          onChange={(event) => onUpdateValue(cv.id, event.target.value)}
+          className="h-7 w-9 rounded border p-0.5"
+        />
+      </div>
+    );
+  }
+
+  if (column.columnType === "AUTO_NUMBER") {
+    return <span className="text-xs font-mono text-muted-foreground">{asString(rawValue) || "-"}</span>;
+  }
+
+  if (column.columnType === "CREATION_LOG" || column.columnType === "LAST_UPDATE") {
+    const entry = rawValue && typeof rawValue === "object" ? (rawValue as Record<string, unknown>) : {};
+    const actor = asString(entry.userName ?? entry.by ?? "").trim() || "Unknown";
+    const dateRaw = asString(entry.date ?? entry.at ?? "").trim();
+    const label = column.columnType === "CREATION_LOG" ? "Created" : "Updated";
+    const dateText = dateRaw ? new Date(dateRaw).toLocaleString() : "unknown date";
+    return <span className="text-[11px] text-muted-foreground">{label} by {actor} on {dateText}</span>;
+  }
+
+  if (column.columnType === "VOTE") {
+    const voteEntry = rawValue && typeof rawValue === "object" ? (rawValue as Record<string, unknown>) : {};
+    const up = Number(voteEntry.up ?? voteEntry.upvotes ?? 0) || 0;
+    const down = Number(voteEntry.down ?? voteEntry.downvotes ?? 0) || 0;
+    return (
+      <div className="flex items-center gap-1 text-[11px]">
+        <Button size="sm" variant="outline" className="h-6 px-2" onClick={() => onUpdateValue(cv.id, { up: up + 1, down })}>
+          ▲
+        </Button>
+        <span>{up - down}</span>
+        <Button size="sm" variant="outline" className="h-6 px-2" onClick={() => onUpdateValue(cv.id, { up, down: down + 1 })}>
+          ▼
+        </Button>
+      </div>
+    );
+  }
+
+  if (column.columnType === "HOUR") {
+    return (
+      <Input
+        type="time"
+        defaultValue={typeof rawValue === "string" ? rawValue : ""}
+        onBlur={(event) => onUpdateValue(cv.id, event.target.value || null)}
+        className="h-8 border-0 px-1 text-xs"
+      />
+    );
+  }
+
+  if (column.columnType === "LOCATION") {
+    const text = asString(rawValue).trim();
+    return <span className="block truncate text-xs">{text || "-"}</span>;
+  }
+
+  if (column.columnType === "WORLD_CLOCK") {
+    const tz = asString(rawValue).trim() || "UTC";
+    let current = "";
+    try {
+      current = new Date().toLocaleTimeString(undefined, { timeZone: tz, hour: "2-digit", minute: "2-digit" });
+    } catch {
+      current = new Date().toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    }
+    return <span className="text-xs text-muted-foreground">{tz}: {current}</span>;
+  }
+
+  if (column.columnType === "DEPENDENCY") {
+    const entries = Array.isArray(rawValue) ? rawValue : [];
+    if (!entries.length) return <span className="text-xs text-muted-foreground">No links</span>;
+    return (
+      <div className="flex flex-wrap gap-1">
+        {entries.map((entry, index) => {
+          const itemId = typeof entry === "object" && entry ? asString((entry as Record<string, unknown>).id) : "";
+          const itemName = typeof entry === "object" && entry
+            ? asString((entry as Record<string, unknown>).name)
+            : asString(entry);
+          return (
+            <button
+              key={`${cv.id}-dep-${itemId || index}`}
+              className="rounded border px-1.5 py-0.5 text-[10px] text-mamba-700 hover:bg-mamba-50"
+              onClick={() => itemId && onSelectItem(itemId)}
+            >
+              {itemName || "Linked item"}
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
+
+  if (column.columnType === "TIMELINE") {
+    const range = getTimelineRange(rawValue);
+    const start = range ? range.start.toISOString().slice(0, 10) : "";
+    const end = range ? range.end.toISOString().slice(0, 10) : "";
+    return (
+      <div className="flex items-center gap-1">
+        <Input
+          type="date"
+          defaultValue={start}
+          onBlur={(event) => {
+            const nextStart = event.target.value;
+            const nextEnd = end || nextStart;
+            if (!nextStart) return onUpdateValue(cv.id, null);
+            onUpdateValue(cv.id, { start: nextStart, end: nextEnd });
+          }}
+          className="h-8 border-0 px-1 text-[10px]"
+        />
+        <span className="text-[10px] text-muted-foreground">to</span>
+        <Input
+          type="date"
+          defaultValue={end}
+          onBlur={(event) => {
+            const nextEnd = event.target.value;
+            const nextStart = start || nextEnd;
+            if (!nextEnd) return onUpdateValue(cv.id, null);
+            onUpdateValue(cv.id, { start: nextStart, end: nextEnd });
+          }}
+          className="h-8 border-0 px-1 text-[10px]"
+        />
+      </div>
+    );
+  }
+
   return (
     <Input
       type="text"
@@ -1504,14 +2142,19 @@ function KanbanView({
   columns,
   onCycleStatus,
   onUpdateValue,
+  onCreateItemInLane,
+  searchQuery,
   onSelectItem,
 }: {
   groups: Group[];
   columns: Column[];
   onCycleStatus: (itemId: string, cv: ColumnValue) => void;
   onUpdateValue: (valueId: string, value: unknown) => void;
+  onCreateItemInLane: (statusIndex: number) => void;
+  searchQuery: string;
   onSelectItem: (itemId: string) => void;
 }) {
+  const [laneOrder, setLaneOrder] = useState<Record<number, string[]>>({});
   const statusColumn = columns.find((column) => column.columnType === "STATUS");
 
   if (!statusColumn) {
@@ -1540,30 +2183,71 @@ function KanbanView({
     }
   }
 
+  useEffect(() => {
+    setLaneOrder((prev) => {
+      const next: Record<number, string[]> = {};
+      for (const lane of lanes) {
+        const ids = lane.items.map((item) => item.id);
+        const existing = (prev[lane.index] ?? []).filter((id) => ids.includes(id));
+        const missing = ids.filter((id) => !existing.includes(id));
+        next[lane.index] = [...existing, ...missing];
+      }
+      return next;
+    });
+  }, [groups, laneCount]);
+
+  const orderedLanes = lanes.map((lane) => {
+    const order = laneOrder[lane.index] ?? [];
+    const orderMap = new Map(order.map((id, index) => [id, index]));
+    const items = [...lane.items].sort((a, b) => {
+      const ai = orderMap.get(a.id) ?? Number.MAX_SAFE_INTEGER;
+      const bi = orderMap.get(b.id) ?? Number.MAX_SAFE_INTEGER;
+      return ai - bi;
+    });
+    return { ...lane, items };
+  });
+
   const handleDragEnd = (result: DropResult) => {
     if (!result.destination) return;
+    const destination = result.destination;
 
     const sourceLane = Number(result.source.droppableId);
-    const destinationLane = Number(result.destination.droppableId);
+    const destinationLane = Number(destination.droppableId);
 
     if (Number.isNaN(sourceLane) || Number.isNaN(destinationLane)) return;
 
-    const draggedItem = lanes[sourceLane]?.items[result.source.index];
+    const draggedItem = orderedLanes[sourceLane]?.items[result.source.index];
     if (!draggedItem) return;
-
-    const statusValue = draggedItem.columnValues.find((value) => value.column.id === statusColumn.id);
-    if (!statusValue) return;
     if (sourceLane === destinationLane && result.source.index === result.destination.index) return;
-    if (typeof statusValue.value === "number" && statusValue.value === destinationLane) return;
 
-    onUpdateValue(statusValue.id, destinationLane);
+    setLaneOrder((prev) => {
+      const source = [...(prev[sourceLane] ?? orderedLanes[sourceLane].items.map((entry) => entry.id))];
+      const destinationIds = sourceLane === destinationLane
+        ? source
+        : [...(prev[destinationLane] ?? orderedLanes[destinationLane].items.map((entry) => entry.id))];
+      const [movedId] = source.splice(result.source.index, 1);
+      if (!movedId) return prev;
+      destinationIds.splice(destination.index, 0, movedId);
+      return {
+        ...prev,
+        [sourceLane]: source,
+        [destinationLane]: destinationIds,
+      };
+    });
+
+    if (sourceLane !== destinationLane) {
+      const statusValue = draggedItem.columnValues.find((value) => value.column.id === statusColumn.id);
+      if (!statusValue) return;
+      if (typeof statusValue.value === "number" && statusValue.value === destinationLane) return;
+      onUpdateValue(statusValue.id, destinationLane);
+    }
   };
 
   return (
     <div className="h-full overflow-auto px-4 py-3">
       <DragDropContext onDragEnd={handleDragEnd}>
         <div className="flex min-w-[940px] gap-3">
-          {lanes.map((lane) => (
+          {orderedLanes.map((lane) => (
             <div key={lane.index} className="kanban-lane">
               <div className="kanban-lane-header">
                 <span className="status-pill" style={{ backgroundColor: lane.color }}>
@@ -1591,7 +2275,7 @@ function KanbanView({
                               ref={dragProvided.innerRef}
                               {...dragProvided.draggableProps}
                               {...dragProvided.dragHandleProps}
-                              className="kanban-card"
+                              className={cn("kanban-card", searchQuery && "ring-1 ring-mamba-300")}
                               onClick={() => onSelectItem(item.id)}
                             >
                               <p className="text-left text-sm font-medium">{item.name}</p>
@@ -1631,6 +2315,14 @@ function KanbanView({
                         No items
                       </div>
                     )}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="mt-1 h-8 w-full text-xs"
+                      onClick={() => onCreateItemInLane(lane.index)}
+                    >
+                      <Plus className="mr-1 h-3 w-3" /> New Item
+                    </Button>
                   </div>
                 )}
               </Droppable>
@@ -1645,9 +2337,11 @@ function KanbanView({
 function TimelineView({
   groups,
   columns,
+  searchQuery,
 }: {
   groups: Group[];
   columns: Column[];
+  searchQuery: string;
 }) {
   const [zoom, setZoom] = useState<"day" | "week" | "month">("week");
   const timelineColumn = columns.find((column) => column.columnType === "TIMELINE");
@@ -1755,7 +2449,9 @@ function TimelineView({
             </div>
             {timelineRows.map((row) => (
               <div key={row.id} className="flex h-9 items-center border-b px-3">
-                <div className="truncate text-xs font-medium">{row.name}</div>
+                <div className={cn("truncate text-xs font-medium", searchQuery && "rounded bg-mamba-100 px-1 py-0.5")}>
+                  {row.name}
+                </div>
               </div>
             ))}
           </div>
