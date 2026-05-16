@@ -359,6 +359,22 @@ export function BoardClient({ user, board }: BoardClientProps) {
 
   const resizeRef = useRef<{ columnId: string; startX: number; startWidth: number } | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(new Set());
+  const toggleItemSelect = useCallback((itemId: string) => {
+    setSelectedItemIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(itemId)) next.delete(itemId); else next.add(itemId);
+      return next;
+    });
+  }, []);
+  const clearSelection = useCallback(() => setSelectedItemIds(new Set()), []);
+  const selectAll = useCallback((allItemIds: string[]) => {
+    setSelectedItemIds((prev) => {
+      const allSelected = allItemIds.every((id) => prev.has(id));
+      const next = new Set(allSelected ? [] : allItemIds);
+      return next;
+    });
+  }, []);
   // ─── Real-time socket listeners ──────────────────────
   useBoardSocket(board.id, {
     onItemCreated: (data) => {
@@ -440,6 +456,65 @@ export function BoardClient({ user, board }: BoardClientProps) {
 
 
   const allItems = useMemo(() => groups.flatMap((group) => group.items), [groups]);
+
+  const handleBulkDelete = useCallback(async () => {
+    if (selectedItemIds.size === 0) return;
+    if (!confirm(`Delete ${selectedItemIds.size} item(s)?`)) return;
+    await Promise.all(
+      Array.from(selectedItemIds).map((id) =>
+        fetch(`/api/items/${id}`, { method: "DELETE" })
+      )
+    );
+    setSelectedItemIds(new Set());
+    setGroups((prev) => prev.map((g) => ({ ...g, items: g.items.filter((i) => !selectedItemIds.has(i.id)) })));
+  }, [selectedItemIds, setGroups]);
+
+  const handleBulkStatusChange = useCallback(async (statusIndex: number) => {
+    if (selectedItemIds.size === 0) return;
+    const statusColumn = columns.find((col) => col.columnType === "STATUS");
+    if (!statusColumn) return;
+    const statusMeta = (statusColumn.config as { labels?: string[]; colors?: string[] } | null) ?? {};
+    const labels = statusMeta.labels ?? [];
+    const newLabel = labels[statusIndex];
+    if (!newLabel) return;
+    await Promise.all(
+      Array.from(selectedItemIds).map(async (itemId) => {
+        const item = allItems.find((i) => i.id === itemId);
+        if (!item) return;
+        const cv = item.columnValues.find((v) => v.column.id === statusColumn.id);
+        if (cv) {
+          await fetch(`/api/columns/values/${cv.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ value: { index: statusIndex, label: newLabel } }),
+          });
+        }
+      })
+    );
+    setSelectedItemIds(new Set());
+    setGroups((prev) => prev.map((g) => ({
+      ...g,
+      items: g.items.map((i) => {
+        if (!selectedItemIds.has(i.id)) return i;
+        return { ...i, columnValues: i.columnValues.map((v) => v.column.id !== statusColumn.id ? v : { ...v, value: { index: statusIndex, label: newLabel } }) };
+      }),
+    })));
+  }, [selectedItemIds, columns, allItems, setGroups]);
+
+  const handleBulkMove = useCallback(async (targetGroupId: string) => {
+    if (selectedItemIds.size === 0) return;
+    await Promise.all(
+      Array.from(selectedItemIds).map((id) =>
+        fetch(`/api/items/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ groupId: targetGroupId }),
+        })
+      )
+    );
+    setSelectedItemIds(new Set());
+    setGroups((prev) => prev.map((g) => ({ ...g, items: g.items.filter((i) => !selectedItemIds.has(i.id)) })));
+  }, [selectedItemIds, setGroups]);
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
 
   const isFilterActive = useCallback((filter: FilterState) => {
@@ -1322,7 +1397,10 @@ export function BoardClient({ user, board }: BoardClientProps) {
             onToggleSubitems={(itemId) =>
               setExpandedSubitems((prev) => ({ ...prev, [itemId]: !prev[itemId] }))
             }
-          />
+          selectedItemIds={selectedItemIds}
+onToggleItemSelect={toggleItemSelect}
+onSelectAll={() => selectAll(filteredGroups.flatMap((g) => g.items.map((i) => i.id)))}
+/>
         )}
 
         {viewMode === "KANBAN" && (
@@ -1579,6 +1657,9 @@ function TableView({
   expandedSubitems,
   searchQuery,
   onToggleSubitems,
+  selectedItemIds,
+  onToggleItemSelect,
+  onSelectAll,
 }: {
   groups: Group[];
   columns: Column[];
@@ -1600,6 +1681,9 @@ function TableView({
   expandedSubitems: Record<string, boolean>;
   searchQuery: string;
   onToggleSubitems: (itemId: string) => void;
+  selectedItemIds: Set<string>;
+  onToggleItemSelect: (itemId: string) => void;
+  onSelectAll: () => void;
 }) {
   return (
     <div className="h-full overflow-auto">
@@ -1659,6 +1743,8 @@ function TableView({
               expandedSubitems={expandedSubitems}
               searchQuery={searchQuery}
               onToggleSubitems={onToggleSubitems}
+selectedItemIds={selectedItemIds}
+onToggleItemSelect={onToggleItemSelect}
             />
           ))}
         </tbody>
@@ -1685,6 +1771,8 @@ function GroupRows({
   expandedSubitems,
   searchQuery,
   onToggleSubitems,
+  selectedItemIds,
+  onToggleItemSelect,
 }: {
   group: Group;
   columns: Column[];
@@ -1703,6 +1791,8 @@ function GroupRows({
   expandedSubitems: Record<string, boolean>;
   searchQuery: string;
   onToggleSubitems: (itemId: string) => void;
+  selectedItemIds: Set<string>;
+  onToggleItemSelect: (itemId: string) => void;
 }) {
   const statusColumn = columns.find((column) => column.columnType === "STATUS");
 
@@ -1737,7 +1827,13 @@ function GroupRows({
           onClick={() => onSelectItem(item.id)}
         >
           <td className="w-10 px-2">
-            <input type="checkbox" className="h-3.5 w-3.5 rounded border-muted-foreground/40" />
+            <input
+                    type="checkbox"
+                    className="h-3.5 w-3.5 rounded border-muted-foreground/40"
+                    checked={selectedItemIds.has(item.id)}
+                    onChange={(e) => { e.stopPropagation(); onToggleItemSelect(item.id); }}
+                    onClick={(e) => e.stopPropagation()}
+                  />
           </td>
           <td className="sticky left-0 min-w-[260px] bg-background px-3 py-2">
             <div className="flex items-center gap-2">
