@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, FolderKanban, Settings, Zap, Bell, Users,
-  BarChart3, FileText, Webhook,
+  BarChart3, FileText, Webhook, Activity,
 } from "lucide-react";
 
 interface SidebarProps {
@@ -17,11 +17,12 @@ interface SidebarProps {
     avatarUrl: string | null;
     role: string;
   };
+  dashboards?: Array<{ id: string; name: string }>;
   className?: string;
   onNavigate?: () => void;
 }
 
-export function DashboardSidebar({ user, className, onNavigate }: SidebarProps) {
+export function DashboardSidebar({ user, dashboards = [], className, onNavigate }: SidebarProps) {
   const pathname = usePathname();
 
   const navItems = [
@@ -31,6 +32,7 @@ export function DashboardSidebar({ user, className, onNavigate }: SidebarProps) 
     { href: "/workload", label: "Workload", icon: Users },
     { href: "/docs", label: "Docs", icon: FileText },
     { href: "/automations", label: "Automations", icon: Zap },
+    { href: "/activities", label: "Activity", icon: Activity },
     { href: "/webhooks", label: "Webhooks", icon: Webhook },
     { href: "/team", label: "Team", icon: Users },
     { href: "/notifications", label: "Notifications", icon: Bell },
@@ -75,6 +77,30 @@ export function DashboardSidebar({ user, className, onNavigate }: SidebarProps) 
             {item.label}
           </Link>
         ))}
+
+        {dashboards.length > 0 && (
+          <div className="mt-5 space-y-1">
+            <p className="px-3 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Dashboards
+            </p>
+            {dashboards.slice(0, 8).map((dashboard) => (
+              <Link
+                key={dashboard.id}
+                href={`/insights?dashboard=${dashboard.id}`}
+                onClick={onNavigate}
+                className={cn(
+                  "block truncate rounded-lg px-3 py-1.5 text-xs transition-colors",
+                  pathname === "/insights"
+                    ? "text-foreground hover:bg-accent"
+                    : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                )}
+                title={dashboard.name}
+              >
+                {dashboard.name}
+              </Link>
+            ))}
+          </div>
+        )}
       </nav>
 
       {/* User */}

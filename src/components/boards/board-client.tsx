@@ -917,6 +917,74 @@ export function BoardClient({ user, board }: BoardClientProps) {
     }
   }, []);
 
+  const handleReorderTableItems = useCallback(async (
+    itemId: string,
+    sourceGroupId: string,
+    destinationGroupId: string,
+    destinationIndex: number
+  ) => {
+    let updates: Array<{ id: string; groupId: string; position: number }> = [];
+
+    setGroups((prev) => {
+      const sourceGroup = prev.find((group) => group.id === sourceGroupId);
+      const destinationGroup = prev.find((group) => group.id === destinationGroupId);
+      if (!sourceGroup || !destinationGroup) return prev;
+
+      const sourceItems = [...sourceGroup.items];
+      const sourceIndex = sourceItems.findIndex((item) => item.id === itemId);
+      if (sourceIndex < 0) return prev;
+
+      const [movedItem] = sourceItems.splice(sourceIndex, 1);
+      if (!movedItem) return prev;
+
+      const destinationItems = sourceGroupId === destinationGroupId ? sourceItems : [...destinationGroup.items];
+      const nextIndex = Math.max(0, Math.min(destinationIndex, destinationItems.length));
+      destinationItems.splice(nextIndex, 0, { ...movedItem, groupId: destinationGroupId });
+
+      const nextGroups = prev.map((group) => {
+        if (group.id === sourceGroupId && group.id === destinationGroupId) {
+          return {
+            ...group,
+            items: destinationItems.map((item, index) => ({ ...item, position: index })),
+          };
+        }
+        if (group.id === sourceGroupId) {
+          return {
+            ...group,
+            items: sourceItems.map((item, index) => ({ ...item, position: index })),
+          };
+        }
+        if (group.id === destinationGroupId) {
+          return {
+            ...group,
+            items: destinationItems.map((item, index) => ({ ...item, position: index })),
+          };
+        }
+        return group;
+      });
+
+      const changedGroups = new Set([sourceGroupId, destinationGroupId]);
+      updates = nextGroups
+        .filter((group) => changedGroups.has(group.id))
+        .flatMap((group) => group.items.map((item, index) => ({ id: item.id, groupId: group.id, position: index })));
+
+      return nextGroups;
+    });
+
+    await Promise.all(
+      updates.map((update) =>
+        fetch(`/api/items/${update.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            groupId: update.groupId,
+            position: update.position,
+          }),
+        })
+      )
+    );
+  }, []);
+
   const handleAddComment = useCallback(async (itemId: string, commentText: string, parentId?: string) => {
     const body = commentText.trim();
     if (!body) return;
@@ -1453,10 +1521,11 @@ export function BoardClient({ user, board }: BoardClientProps) {
             onToggleSubitems={(itemId) =>
               setExpandedSubitems((prev) => ({ ...prev, [itemId]: !prev[itemId] }))
             }
-          selectedItemIds={selectedItemIds}
-onToggleItemSelect={toggleItemSelect}
-onSelectAll={() => selectAll(filteredGroups.flatMap((g) => g.items.map((i) => i.id)))}
-/>
+            selectedItemIds={selectedItemIds}
+            onToggleItemSelect={toggleItemSelect}
+            onSelectAll={() => selectAll(filteredGroups.flatMap((g) => g.items.map((i) => i.id)))}
+            onReorderItems={handleReorderTableItems}
+          />
         )}
 
         {viewMode === "KANBAN" && (
@@ -1716,6 +1785,7 @@ function TableView({
   selectedItemIds,
   onToggleItemSelect,
   onSelectAll,
+  onReorderItems,
 }: {
   groups: Group[];
   columns: Column[];
@@ -1740,45 +1810,63 @@ function TableView({
   selectedItemIds: Set<string>;
   onToggleItemSelect: (itemId: string) => void;
   onSelectAll: () => void;
+  onReorderItems: (itemId: string, sourceGroupId: string, destinationGroupId: string, destinationIndex: number) => void;
 }) {
+  const handleDragEnd = (result: DropResult) => {
+    if (!result.destination) return;
+    if (
+      result.source.droppableId === result.destination.droppableId &&
+      result.source.index === result.destination.index
+    ) {
+      return;
+    }
+
+    onReorderItems(
+      result.draggableId,
+      result.source.droppableId,
+      result.destination.droppableId,
+      result.destination.index
+    );
+  };
+
   return (
     <div className="h-full overflow-auto">
-      <table className="board-table w-full">
-        <thead>
-          <tr>
-            <th className="w-10" />
-            <th className="sticky left-0 min-w-[260px] bg-background">Item</th>
-            {columns.map((column) => {
-              const isSorted = sortState?.columnId === column.id;
+      <DragDropContext onDragEnd={handleDragEnd}>
+        <table className="board-table w-full">
+          <thead>
+            <tr>
+              <th className="w-10" />
+              <th className="sticky left-0 min-w-[260px] bg-background">Item</th>
+              {columns.map((column) => {
+                const isSorted = sortState?.columnId === column.id;
 
-              return (
-                <th key={column.id} style={{ width: column.width ?? 170 }} className="relative min-w-[130px]">
-                  <button
-                    className="flex w-full items-center justify-between gap-2 text-left"
-                    onClick={() => onSort(column.id)}
-                  >
-                    <span className="truncate">{column.title}</span>
-                    {isSorted && (
-                      <span className="text-[10px] text-mamba-700">
-                        {sortState?.direction === "asc" ? "▲" : "▼"}
-                      </span>
-                    )}
-                  </button>
-                  <div
-                    className="absolute right-0 top-0 h-full w-1 cursor-col-resize bg-transparent hover:bg-mamba-200"
-                    onMouseDown={(event) => {
-                      event.preventDefault();
-                      onResizeStart(column.id, event.clientX, column.width ?? 170);
-                    }}
-                  />
-                </th>
-              );
-            })}
-            <th className="w-10" />
-          </tr>
-        </thead>
+                return (
+                  <th key={column.id} style={{ width: column.width ?? 170 }} className="relative min-w-[130px]">
+                    <button
+                      className="flex w-full items-center justify-between gap-2 text-left"
+                      onClick={() => onSort(column.id)}
+                    >
+                      <span className="truncate">{column.title}</span>
+                      {isSorted && (
+                        <span className="text-[10px] text-mamba-700">
+                          {sortState?.direction === "asc" ? "▲" : "▼"}
+                        </span>
+                      )}
+                    </button>
+                    <div
+                      className="absolute right-0 top-0 h-full w-1 cursor-col-resize bg-transparent hover:bg-mamba-200"
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        onResizeStart(column.id, event.clientX, column.width ?? 170);
+                      }}
+                    />
+                  </th>
+                );
+              })}
+              <th className="w-10" />
+            </tr>
+          </thead>
 
-        <tbody>
           {groups.map((group) => (
             <GroupRows
               key={group.id}
@@ -1799,12 +1887,12 @@ function TableView({
               expandedSubitems={expandedSubitems}
               searchQuery={searchQuery}
               onToggleSubitems={onToggleSubitems}
-selectedItemIds={selectedItemIds}
-onToggleItemSelect={onToggleItemSelect}
+              selectedItemIds={selectedItemIds}
+              onToggleItemSelect={onToggleItemSelect}
             />
           ))}
-        </tbody>
-      </table>
+        </table>
+      </DragDropContext>
     </div>
   );
 }
@@ -1853,195 +1941,224 @@ function GroupRows({
   const statusColumn = columns.find((column) => column.columnType === "STATUS");
 
   return (
-    <>
-      <tr className="group-row">
-        <td colSpan={columns.length + 3} className="p-0">
-          <div className="group-header" style={{ borderLeftColor: group.color, backgroundColor: `${group.color}11` }}>
-            <button
-              className="flex items-center gap-1"
-              onClick={() => onToggleCollapse(group.id)}
-            >
-              {group.isCollapsed ? (
-                <ChevronRight className="h-4 w-4" style={{ color: group.color }} />
-              ) : (
-                <ChevronDown className="h-4 w-4" style={{ color: group.color }} />
-              )}
-              <span style={{ color: group.color }}>{group.name}</span>
-              <span className="text-xs text-muted-foreground">({group.items.length})</span>
-            </button>
-            <Button variant="ghost" size="icon" className="ml-auto h-7 w-7">
-              <MoreHorizontal className="h-3.5 w-3.5" />
-            </Button>
-          </div>
-        </td>
-      </tr>
-
-      {!group.isCollapsed && sortedItems.map((item) => (
-        <tr
-          key={item.id}
-          className={cn("item-row", searchQuery && "bg-mamba-50/35")}
-          onClick={() => onSelectItem(item.id)}
-        >
-          <td className="w-10 px-2">
-            <input
-                    type="checkbox"
-                    className="h-3.5 w-3.5 rounded border-muted-foreground/40"
-                    checked={selectedItemIds.has(item.id)}
-                    onChange={(e) => { e.stopPropagation(); onToggleItemSelect(item.id); }}
-                    onClick={(e) => e.stopPropagation()}
-                  />
-          </td>
-          <td className="sticky left-0 min-w-[260px] bg-background px-3 py-2">
-            <div className="flex items-center gap-2">
-              {item.subitems && item.subitems.length > 0 && (
+    <Droppable droppableId={group.id}>
+      {(provided, snapshot) => (
+        <tbody ref={provided.innerRef} {...provided.droppableProps}>
+          <tr className="group-row">
+            <td colSpan={columns.length + 3} className="p-0">
+              <div className="group-header" style={{ borderLeftColor: group.color, backgroundColor: `${group.color}11` }}>
                 <button
-                  className="rounded p-0.5 hover:bg-accent"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onToggleSubitems(item.id);
-                  }}
+                  className="flex items-center gap-1"
+                  onClick={() => onToggleCollapse(group.id)}
                 >
-                  {expandedSubitems[item.id] ? (
-                    <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                  {group.isCollapsed ? (
+                    <ChevronRight className="h-4 w-4" style={{ color: group.color }} />
                   ) : (
-                    <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                    <ChevronDown className="h-4 w-4" style={{ color: group.color }} />
                   )}
+                  <span style={{ color: group.color }}>{group.name}</span>
+                  <span className="text-xs text-muted-foreground">({group.items.length})</span>
                 </button>
-              )}
-              <GripVertical className="h-3.5 w-3.5 text-muted-foreground/40" />
-              <span className={cn("text-sm font-medium", searchQuery && "rounded bg-mamba-100 px-1 py-0.5")}>
-                {item.name}
-              </span>
-              {item._count.comments > 0 && (
-                <Badge variant="secondary" className="rounded-full px-2 py-0 text-[10px]">
-                  {item._count.comments} updates
-                </Badge>
-              )}
-              {item.timeEntries && item.timeEntries.length > 0 && (
-                <Badge variant="outline" className="rounded-full px-2 py-0 text-[10px]">
-                  {formatDuration(
-                    item.timeEntries.reduce((acc, entry) => {
-                      if (entry.isRunning) {
-                        const start = new Date(entry.startTime).getTime();
-                        return acc + entry.durationSeconds + Math.max(0, Math.round((Date.now() - start) / 1000));
-                      }
-                      return acc + entry.durationSeconds;
-                    }, 0)
-                  )}
-                </Badge>
-              )}
-            </div>
-          </td>
-
-          {columns.map((column) => (
-            <td
-              key={column.id}
-              className="min-w-[130px] px-2 py-1"
-              onClick={(event) => event.stopPropagation()}
-            >
-              <CellRenderer
-                item={item}
-                column={column}
-                onCycleStatus={onCycleStatus}
-                onUpdateValue={onUpdateValue}
-                onUploadFile={onUploadFile}
-                onSelectItem={onSelectItem}
-              />
-            </td>
-          ))}
-
-          <td className="w-10 px-1" onClick={(event) => event.stopPropagation()}>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-7 w-7">
+                <Button variant="ghost" size="icon" className="ml-auto h-7 w-7">
                   <MoreHorizontal className="h-3.5 w-3.5" />
                 </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem className="text-destructive" onClick={() => onDeleteItem(item.id, group.id)}>
-                  <Trash2 className="mr-2 h-3.5 w-3.5" /> Delete Item
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </td>
-        </tr>
-      ))}
-
-      {!group.isCollapsed &&
-        sortedItems.flatMap((item) => {
-          if (!expandedSubitems[item.id] || !item.subitems?.length) return [];
-          return item.subitems.map((subitem) => {
-            const statusValue = statusColumn
-              ? subitem.columnValues.find((value) => value.column.id === statusColumn.id)
-              : null;
-            const { labels, colors } = statusColumn
-              ? getStatusMeta(statusColumn)
-              : { labels: [], colors: [] };
-            const statusIndex = typeof statusValue?.value === "number" ? statusValue.value : 0;
-
-            return (
-              <tr key={subitem.id} className="bg-muted/20 hover:bg-muted/40">
-                <td />
-                <td className="sticky left-0 bg-muted/20 px-3 py-1.5 text-xs text-muted-foreground">
-                  ↳ {subitem.name}
-                </td>
-                {columns.map((column) => (
-                  <td key={`${subitem.id}-${column.id}`} className="px-2 py-1 text-xs">
-                    {statusColumn && column.id === statusColumn.id && (
-                      <span
-                        className="inline-flex rounded px-1.5 py-0.5 text-[10px] text-white"
-                        style={{ backgroundColor: colors[statusIndex] ?? "#9ca3af" }}
-                      >
-                        {labels[statusIndex] ?? "No Status"}
-                      </span>
-                    )}
-                  </td>
-                ))}
-                <td />
-              </tr>
-            );
-          });
-        })}
-
-      {!group.isCollapsed && (
-        <tr>
-          <td colSpan={columns.length + 3} className="px-2 py-1">
-            {showNewItem[group.id] ? (
-              <div className="flex items-center gap-2 rounded-md border border-dashed px-2 py-1">
-                <Input
-                  placeholder="New item name"
-                  value={newItemName[group.id] ?? ""}
-                  onChange={(event) =>
-                    setNewItemName((prev) => ({ ...prev, [group.id]: event.target.value }))
-                  }
-                  onKeyDown={(event) => event.key === "Enter" && onAddItem(group.id)}
-                  className="h-8 border-0 px-1"
-                  autoFocus
-                />
-                <Button size="sm" className="h-7 bg-mamba-600 hover:bg-mamba-700" onClick={() => onAddItem(group.id)}>
-                  Add
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-7"
-                  onClick={() => setShowNewItem((prev) => ({ ...prev, [group.id]: false }))}
-                >
-                  <X className="h-3.5 w-3.5" />
-                </Button>
               </div>
-            ) : (
-              <button
-                className="new-item-row"
-                onClick={() => setShowNewItem((prev) => ({ ...prev, [group.id]: true }))}
-              >
-                <Plus className="h-3.5 w-3.5" /> New Item
-              </button>
-            )}
-          </td>
-        </tr>
+            </td>
+          </tr>
+
+          {!group.isCollapsed && sortedItems.map((item, index) => (
+            <Draggable key={item.id} draggableId={item.id} index={index}>
+              {(dragProvided, dragSnapshot) => (
+                <tr
+                  ref={dragProvided.innerRef}
+                  {...dragProvided.draggableProps}
+                  className={cn(
+                    "item-row",
+                    searchQuery && "bg-mamba-50/35",
+                    snapshot.isDraggingOver && "bg-mamba-50/30",
+                    dragSnapshot.isDragging && "bg-card shadow-lg"
+                  )}
+                  onClick={() => onSelectItem(item.id)}
+                >
+                  <td className="w-10 px-2">
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        className="cursor-grab rounded p-0.5 text-muted-foreground/40 hover:text-muted-foreground"
+                        {...dragProvided.dragHandleProps}
+                        onClick={(event) => event.stopPropagation()}
+                        aria-label="Drag item"
+                      >
+                        <GripVertical className="h-3.5 w-3.5" />
+                      </button>
+                      <input
+                        type="checkbox"
+                        className="h-3.5 w-3.5 rounded border-muted-foreground/40"
+                        checked={selectedItemIds.has(item.id)}
+                        onChange={(event) => { event.stopPropagation(); onToggleItemSelect(item.id); }}
+                        onClick={(event) => event.stopPropagation()}
+                      />
+                    </div>
+                  </td>
+                  <td className="sticky left-0 min-w-[260px] bg-background px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      {item.subitems && item.subitems.length > 0 && (
+                        <button
+                          className="rounded p-0.5 hover:bg-accent"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onToggleSubitems(item.id);
+                          }}
+                        >
+                          {expandedSubitems[item.id] ? (
+                            <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                          ) : (
+                            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                          )}
+                        </button>
+                      )}
+                      <span className={cn("text-sm font-medium", searchQuery && "rounded bg-mamba-100 px-1 py-0.5")}>
+                        {item.name}
+                      </span>
+                      {item._count.comments > 0 && (
+                        <Badge variant="secondary" className="rounded-full px-2 py-0 text-[10px]">
+                          {item._count.comments} updates
+                        </Badge>
+                      )}
+                      {item.timeEntries && item.timeEntries.length > 0 && (
+                        <Badge variant="outline" className="rounded-full px-2 py-0 text-[10px]">
+                          {formatDuration(
+                            item.timeEntries.reduce((acc, entry) => {
+                              if (entry.isRunning) {
+                                const start = new Date(entry.startTime).getTime();
+                                return acc + entry.durationSeconds + Math.max(0, Math.round((Date.now() - start) / 1000));
+                              }
+                              return acc + entry.durationSeconds;
+                            }, 0)
+                          )}
+                        </Badge>
+                      )}
+                    </div>
+                  </td>
+
+                  {columns.map((column) => (
+                    <td
+                      key={column.id}
+                      className="min-w-[130px] px-2 py-1"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <CellRenderer
+                        item={item}
+                        column={column}
+                        onCycleStatus={onCycleStatus}
+                        onUpdateValue={onUpdateValue}
+                        onUploadFile={onUploadFile}
+                        onSelectItem={onSelectItem}
+                      />
+                    </td>
+                  ))}
+
+                  <td className="w-10 px-1" onClick={(event) => event.stopPropagation()}>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="ghost" size="icon" className="h-7 w-7">
+                          <MoreHorizontal className="h-3.5 w-3.5" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem className="text-destructive" onClick={() => onDeleteItem(item.id, group.id)}>
+                          <Trash2 className="mr-2 h-3.5 w-3.5" /> Delete Item
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </td>
+                </tr>
+              )}
+            </Draggable>
+          ))}
+          {!group.isCollapsed && (
+            <tr>
+              <td colSpan={columns.length + 3}>{provided.placeholder}</td>
+            </tr>
+          )}
+
+          {!group.isCollapsed &&
+            sortedItems.flatMap((item) => {
+              if (!expandedSubitems[item.id] || !item.subitems?.length) return [];
+              return item.subitems.map((subitem) => {
+                const statusValue = statusColumn
+                  ? subitem.columnValues.find((value) => value.column.id === statusColumn.id)
+                  : null;
+                const { labels, colors } = statusColumn
+                  ? getStatusMeta(statusColumn)
+                  : { labels: [], colors: [] };
+                const statusIndex = typeof statusValue?.value === "number" ? statusValue.value : 0;
+
+                return (
+                  <tr key={subitem.id} className="bg-muted/20 hover:bg-muted/40">
+                    <td />
+                    <td className="sticky left-0 bg-muted/20 px-3 py-1.5 text-xs text-muted-foreground">
+                      ↳ {subitem.name}
+                    </td>
+                    {columns.map((column) => (
+                      <td key={`${subitem.id}-${column.id}`} className="px-2 py-1 text-xs">
+                        {statusColumn && column.id === statusColumn.id && (
+                          <span
+                            className="inline-flex rounded px-1.5 py-0.5 text-[10px] text-white"
+                            style={{ backgroundColor: colors[statusIndex] ?? "#9ca3af" }}
+                          >
+                            {labels[statusIndex] ?? "No Status"}
+                          </span>
+                        )}
+                      </td>
+                    ))}
+                    <td />
+                  </tr>
+                );
+              });
+            })}
+
+          {!group.isCollapsed && (
+            <tr>
+              <td colSpan={columns.length + 3} className="px-2 py-1">
+                {showNewItem[group.id] ? (
+                  <div className="flex items-center gap-2 rounded-md border border-dashed px-2 py-1">
+                    <Input
+                      placeholder="New item name"
+                      value={newItemName[group.id] ?? ""}
+                      onChange={(event) =>
+                        setNewItemName((prev) => ({ ...prev, [group.id]: event.target.value }))
+                      }
+                      onKeyDown={(event) => event.key === "Enter" && onAddItem(group.id)}
+                      className="h-8 border-0 px-1"
+                      autoFocus
+                    />
+                    <Button size="sm" className="h-7 bg-mamba-600 hover:bg-mamba-700" onClick={() => onAddItem(group.id)}>
+                      Add
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7"
+                      onClick={() => setShowNewItem((prev) => ({ ...prev, [group.id]: false }))}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ) : (
+                  <button
+                    className="new-item-row"
+                    onClick={() => setShowNewItem((prev) => ({ ...prev, [group.id]: true }))}
+                  >
+                    <Plus className="h-3.5 w-3.5" /> New Item
+                  </button>
+                )}
+              </td>
+            </tr>
+          )}
+        </tbody>
       )}
-    </>
+    </Droppable>
   );
 }
 

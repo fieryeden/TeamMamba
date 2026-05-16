@@ -5,6 +5,7 @@ import { createItemSchema, updateItemSchema } from "@/lib/validations";
 import { fireWebhooks } from "@/lib/webhooks";
 import { createAuditLog } from "@/lib/audit";
 import { broadcastToBoard } from "@/lib/socket";
+import { processAutomation } from "@/lib/automation-engine";
 
 export async function GET(req: NextRequest) {
   try {
@@ -93,6 +94,13 @@ export async function POST(req: NextRequest) {
     // Audit log (non-blocking)
     createAuditLog({ action: "ITEM_CREATED", boardId: data.boardId, itemId: item.id, userId: user.id, details: { itemName: data.name } });
     broadcastToBoard(data.boardId, "item:created", { boardId: data.boardId, item });
+    await processAutomation(data.boardId, "ITEM_CREATED", {
+      id: item.id,
+      boardId: data.boardId,
+      groupId: item.groupId,
+      name: item.name,
+      triggeredByUserId: user.id,
+    });
 
     return NextResponse.json({ item }, { status: 201 });
   } catch (err) {

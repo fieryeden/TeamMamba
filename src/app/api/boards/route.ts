@@ -14,29 +14,30 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const workspaceId = searchParams.get("workspaceId");
 
-    if (!workspaceId) {
-      return NextResponse.json({ error: "workspaceId required" }, { status: 400 });
-    }
-
-    // Get user's board IDs in this workspace (for private board visibility)
+    // Get user's board IDs (for private board visibility)
     const userBoardMemberships = await prisma.boardMember.findMany({
       where: {
         userId: user.id,
-        board: { workspaceId },
+        ...(workspaceId ? { board: { workspaceId } } : {}),
       },
       select: { boardId: true },
     });
-    const memberBoardIds = new Set(userBoardMemberships.map((m) => m.boardId));
+    const memberBoardIds = Array.from(new Set(userBoardMemberships.map((m) => m.boardId)));
 
     const boards = await prisma.board.findMany({
       where: {
-        workspaceId,
-        OR: [
-          { boardKind: { not: "PRIVATE" } }, // Non-private boards visible to all workspace members
-          { id: { in: Array.from(memberBoardIds) } }, // Private boards only if member
-        ],
+        ...(workspaceId
+          ? {
+              workspaceId,
+              OR: [
+                { boardKind: { not: "PRIVATE" } },
+                { id: { in: memberBoardIds } },
+              ],
+            }
+          : { id: { in: memberBoardIds } }),
       },
       include: {
+        workspace: { select: { id: true, name: true } },
         columns: { orderBy: { order: "asc" } },
         groups: { orderBy: { position: "asc" } },
         _count: { select: { items: true } },

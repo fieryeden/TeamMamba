@@ -3,9 +3,14 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { InsightsClient } from "@/components/insights/insights-client";
 
-export default async function InsightsPage() {
+export default async function InsightsPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ dashboard?: string }>;
+}) {
   const user = await getAuthUser();
   if (!user) redirect("/login");
+  const params = (await searchParams) ?? {};
 
   const dashboards = await prisma.dashboard.findMany({
     where: { ownerId: user.id },
@@ -33,6 +38,7 @@ export default async function InsightsPage() {
         })),
       }))}
       boards={boards.map((b) => b.board)}
+      initialDashboardId={params.dashboard}
     />
   );
 }

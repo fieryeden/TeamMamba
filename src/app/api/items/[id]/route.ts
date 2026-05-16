@@ -4,6 +4,7 @@ import { getAuthUser } from "@/lib/session";
 import { fireWebhooks } from "@/lib/webhooks";
 import { createAuditLog } from "@/lib/audit";
 import { broadcastToBoard } from "@/lib/socket";
+import { processAutomation } from "@/lib/automation-engine";
 
 export async function PATCH(
   req: NextRequest,
@@ -15,6 +16,11 @@ export async function PATCH(
 
     const { id } = await params;
     const body = await req.json();
+    const existingItem = await prisma.item.findUnique({
+      where: { id },
+      select: { id: true, boardId: true, groupId: true, name: true },
+    });
+    if (!existingItem) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
     const item = await prisma.item.update({
       where: { id },
@@ -30,7 +36,7 @@ export async function PATCH(
     });
 
     // Log activity
-    if (body.groupId) {
+    if (body.groupId && body.groupId !== existingItem.groupId) {
       await prisma.activity.create({
         data: {
           boardId: item.boardId,
@@ -39,6 +45,15 @@ export async function PATCH(
           action: "ITEM_MOVED",
           details: { toGroup: body.groupId },
         },
+      });
+
+      await processAutomation(item.boardId, "ITEM_MOVED_TO_GROUP", {
+        id: item.id,
+        boardId: item.boardId,
+        groupId: item.groupId,
+        name: item.name,
+        previousGroupId: existingItem.groupId,
+        triggeredByUserId: user.id,
       });
     }
 
@@ -57,6 +72,7 @@ export async function PATCH(
       userId: user.id,
       details: { itemName: item.name, changes: Object.keys(body) },
     });
+    broadcastToBoard(item.boardId, "item:updated", { boardId: item.boardId, item });
 
     return NextResponse.json({ item });
   } catch (err) {

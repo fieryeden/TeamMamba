@@ -11,10 +11,8 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const boardId = searchParams.get("boardId");
 
-    if (!boardId) return NextResponse.json({ error: "boardId required" }, { status: 400 });
-
     const automations = await prisma.automation.findMany({
-      where: { boardId },
+      where: { userId: user.id, ...(boardId ? { boardId } : {}) },
       orderBy: { createdAt: "desc" },
     });
 
@@ -48,6 +46,82 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ automation }, { status: 201 });
   } catch (err) {
     console.error("Create automation error:", err);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+  }
+}
+
+export async function PATCH(req: NextRequest) {
+  try {
+    const user = await getAuthUser();
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+    const body = await req.json();
+    const { id } = body as { id?: string };
+    if (!id) return NextResponse.json({ error: "id is required" }, { status: 400 });
+
+    const existing = await prisma.automation.findUnique({
+      where: { id },
+      select: { id: true, userId: true },
+    });
+    if (!existing || existing.userId !== user.id) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+
+    const allowed = [
+      "boardId",
+      "name",
+      "trigger",
+      "conditions",
+      "action",
+      "actionConfig",
+      "isEnabled",
+    ] as const;
+    const data: Record<string, unknown> = {};
+    for (const key of allowed) {
+      if (body[key] !== undefined) {
+        data[key] = key === "conditions" || key === "actionConfig"
+          ? JSON.parse(JSON.stringify(body[key]))
+          : body[key];
+      }
+    }
+
+    if (Object.keys(data).length === 0) {
+      return NextResponse.json({ error: "No fields to update" }, { status: 400 });
+    }
+
+    const automation = await prisma.automation.update({
+      where: { id },
+      data,
+    });
+
+    return NextResponse.json({ automation });
+  } catch (err) {
+    console.error("Update automation error:", err);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+  }
+}
+
+export async function DELETE(req: NextRequest) {
+  try {
+    const user = await getAuthUser();
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+    const body = await req.json();
+    const { id } = body as { id?: string };
+    if (!id) return NextResponse.json({ error: "id is required" }, { status: 400 });
+
+    const existing = await prisma.automation.findUnique({
+      where: { id },
+      select: { id: true, userId: true },
+    });
+    if (!existing || existing.userId !== user.id) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+
+    await prisma.automation.delete({ where: { id } });
+    return NextResponse.json({ success: true });
+  } catch (err) {
+    console.error("Delete automation error:", err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

@@ -5,6 +5,7 @@ import { updateColumnValueSchema } from "@/lib/validations";
 import { evaluateFormulaExpression } from "@/lib/formulas";
 import { sendEmail } from "@/lib/mailer";
 import { broadcastToBoard } from "@/lib/socket";
+import { processAutomation } from "@/lib/automation-engine";
 
 export async function PATCH(
   req: NextRequest,
@@ -87,29 +88,51 @@ export async function PATCH(
           },
         });
 
-        // Trigger automations
-        const automations = await prisma.automation.findMany({
-          where: { boardId: itemData.boardId, isEnabled: true, trigger: "STATUS_CHANGED" },
+        await processAutomation(itemData.boardId, "COLUMN_VALUE_CHANGED", {
+          id: itemData.id,
+          boardId: itemData.boardId,
+          groupId: itemData.groupId,
+          name: itemData.name,
+          triggeredColumnId: columnValue.columnId,
+          triggeredColumnType: columnValue.column.columnType,
+          triggeredByUserId: user.id,
+          newValue: value,
         });
 
-        for (const auto of automations) {
-          if (auto.action === "CHANGE_STATUS" && auto.actionConfig) {
-            const config = auto.actionConfig as Record<string, unknown>;
-            if (config.targetColumnId && config.targetValue !== undefined) {
-              await prisma.columnValue.updateMany({
-                where: { itemId: item.itemId, columnId: config.targetColumnId as string },
-                data: { value: JSON.parse(JSON.stringify(config.targetValue)) as any },
-              });
-            }
-          }
+        if (columnValue.column.columnType === "STATUS") {
+          await processAutomation(itemData.boardId, "STATUS_CHANGED", {
+            id: itemData.id,
+            boardId: itemData.boardId,
+            groupId: itemData.groupId,
+            name: itemData.name,
+            triggeredColumnId: columnValue.columnId,
+            triggeredByUserId: user.id,
+            newValue: value,
+          });
+        }
 
-          if (auto.action === "SEND_EMAIL") {
-            const config = (auto.actionConfig as Record<string, unknown> | null) ?? {};
-            const to = typeof config.to === "string" ? config.to : user.email;
-            const subject = typeof config.subject === "string" ? config.subject : `Automation: ${auto.name}`;
-            const text = typeof config.body === "string" ? config.body : `Item "${itemData.name}" changed in ${itemData.board.name}.`;
-            await sendEmail({ to, subject, text });
-          }
+        if (columnValue.column.columnType === "PEOPLE") {
+          await processAutomation(itemData.boardId, "ASSIGNEE_CHANGED", {
+            id: itemData.id,
+            boardId: itemData.boardId,
+            groupId: itemData.groupId,
+            name: itemData.name,
+            triggeredColumnId: columnValue.columnId,
+            triggeredByUserId: user.id,
+            newValue: value,
+          });
+        }
+
+        if (columnValue.column.title.toLowerCase().includes("priority")) {
+          await processAutomation(itemData.boardId, "PRIORITY_CHANGED", {
+            id: itemData.id,
+            boardId: itemData.boardId,
+            groupId: itemData.groupId,
+            name: itemData.name,
+            triggeredColumnId: columnValue.columnId,
+            triggeredByUserId: user.id,
+            newValue: value,
+          });
         }
 
         if (columnValue.column.columnType === "PEOPLE") {

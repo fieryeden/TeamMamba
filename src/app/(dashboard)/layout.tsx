@@ -12,9 +12,18 @@ export default async function DashboardLayout({ children }: { children: React.Re
     select: { id: true, name: true },
     orderBy: { name: "asc" },
   });
+  const dashboards = await prisma.dashboard.findMany({
+    where: { ownerId: user.id },
+    select: { id: true, name: true },
+    orderBy: { updatedAt: "desc" },
+  });
 
   return (
-    <DashboardShell user={user} workspaces={JSON.parse(JSON.stringify(workspaces))}>
+    <DashboardShell
+      user={user}
+      workspaces={JSON.parse(JSON.stringify(workspaces))}
+      dashboards={JSON.parse(JSON.stringify(dashboards))}
+    >
       {children}
     </DashboardShell>
   );
