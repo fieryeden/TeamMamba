@@ -47,6 +47,8 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn, formatRelativeTime } from "@/lib/utils";
+import { useBoardSocket } from "@/hooks/use-board-socket";
+import { useWorkspacePresence } from "@/hooks/use-workspace-presence";
 
 interface ColumnValue {
   id: string;
@@ -357,6 +359,85 @@ export function BoardClient({ user, board }: BoardClientProps) {
 
   const resizeRef = useRef<{ columnId: string; startX: number; startWidth: number } | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  // ─── Real-time socket listeners ──────────────────────
+  useBoardSocket(board.id, {
+    onItemCreated: (data) => {
+      const d = data as { boardId: string; item: Item };
+      setGroups((prev) =>
+        prev.map((g) =>
+          g.id === d.item.groupId ? { ...g, items: [...g.items, d.item] } : g
+        )
+      );
+    },
+    onItemUpdated: (data) => {
+      const d = data as { boardId: string; item: Item };
+      setGroups((prev) =>
+        prev.map((g) => ({
+          ...g,
+          items: g.items.map((it) => (it.id === d.item.id ? d.item : it)),
+        }))
+      );
+    },
+    onItemDeleted: (data) => {
+      const d = data as { boardId: string; itemId: string };
+      setGroups((prev) =>
+        prev.map((g) => ({
+          ...g,
+          items: g.items.filter((it) => it.id !== d.itemId),
+        }))
+      );
+    },
+    onItemMoved: (data) => {
+      const d = data as { boardId: string; item: Item; fromGroupId: string; toGroupId: string };
+      setGroups((prev) => {
+        let movedItem: Item | undefined;
+        const without = prev.map((g) => {
+          if (g.id === d.fromGroupId) {
+            const items = g.items.filter((it) => {
+              if (it.id === d.item.id) { movedItem = it; return false; }
+              return true;
+            });
+            return { ...g, items };
+          }
+          return g;
+        });
+        if (!movedItem) return without;
+        const updated: Item = { ...movedItem, groupId: d.toGroupId };
+        return without.map((g) =>
+          g.id === d.toGroupId ? { ...g, items: [...g.items, updated] } : g
+        );
+      });
+    },
+    onColumnUpdated: (data) => {
+      const d = data as { boardId: string; columnValue: ColumnValue };
+      setGroups((prev) =>
+        prev.map((g) => ({
+          ...g,
+          items: g.items.map((it) => ({
+            ...it,
+            columnValues: it.columnValues.map((cv) =>
+              cv.id === d.columnValue.id ? (d.columnValue as ColumnValue) : cv
+            ),
+          })),
+        }))
+      );
+    },
+    onGroupCreated: (data) => {
+      const d = data as { boardId: string; group: Group };
+      setGroups((prev) => [...prev, d.group]);
+    },
+    onGroupUpdated: (data) => {
+      const d = data as { boardId: string; group: Group };
+      setGroups((prev) => prev.map((g) => (g.id === d.group.id ? d.group : g)));
+    },
+    onGroupDeleted: (data) => {
+      const d = data as { boardId: string; groupId: string };
+      setGroups((prev) => prev.filter((g) => g.id !== d.groupId));
+    },
+  });
+  // ─── End real-time ──────────────────────────────────
+  const onlineCount = useWorkspacePresence(board.workspace.id);
+
 
   const allItems = useMemo(() => groups.flatMap((group) => group.items), [groups]);
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
@@ -992,6 +1073,12 @@ export function BoardClient({ user, board }: BoardClientProps) {
 
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-2xl font-bold tracking-tight">{board.name}</h1>
+          {onlineCount > 0 && (
+            <span className="inline-flex items-center gap-1 text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
+              <span className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
+              {onlineCount} online
+            </span>
+          )}
 
           <div className="flex items-center gap-2">
             <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as ViewMode)}>

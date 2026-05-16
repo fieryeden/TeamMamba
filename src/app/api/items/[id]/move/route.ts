@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getAuthUser } from "@/lib/session";
+import { broadcastToBoard } from "@/lib/socket";
 
 /**
  * POST /api/items/[id]/move

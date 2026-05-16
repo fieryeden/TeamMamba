@@ -4,6 +4,7 @@ import { getAuthUser } from "@/lib/session";
 import { updateColumnValueSchema } from "@/lib/validations";
 import { evaluateFormulaExpression } from "@/lib/formulas";
 import { sendEmail } from "@/lib/mailer";
+import { broadcastToBoard } from "@/lib/socket";
 
 export async function PATCH(
   req: NextRequest,
@@ -148,10 +149,12 @@ export async function PATCH(
             )
           );
         }
+
+      broadcastToBoard(itemData.boardId, "column:updated", { boardId: itemData.boardId, columnValue });
       }
     }
 
-    return NextResponse.json({ columnValue });
+      return NextResponse.json({ columnValue });
   } catch (err) {
     console.error("Update column value error:", err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });

@@ -4,6 +4,7 @@ import { getAuthUser } from "@/lib/session";
 import { createItemSchema, updateItemSchema } from "@/lib/validations";
 import { fireWebhooks } from "@/lib/webhooks";
 import { createAuditLog } from "@/lib/audit";
+import { broadcastToBoard } from "@/lib/socket";
 
 export async function GET(req: NextRequest) {
   try {
@@ -91,6 +92,7 @@ export async function POST(req: NextRequest) {
 
     // Audit log (non-blocking)
     createAuditLog({ action: "ITEM_CREATED", boardId: data.boardId, itemId: item.id, userId: user.id, details: { itemName: data.name } });
+    broadcastToBoard(data.boardId, "item:created", { boardId: data.boardId, item });
 
     return NextResponse.json({ item }, { status: 201 });
   } catch (err) {

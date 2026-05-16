@@ -4,6 +4,7 @@ import { getAuthUser } from "@/lib/session";
 import { fireWebhooks } from "@/lib/webhooks";
 import { createAuditLog } from "@/lib/audit";
 import { createGroupSchema, updateGroupSchema } from "@/lib/validations";
+import { broadcastToBoard } from "@/lib/socket";
 
 export async function POST(req: NextRequest) {
   try {
@@ -28,6 +29,7 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    broadcastToBoard(data.boardId, "group:created", { boardId: data.boardId, group });
     return NextResponse.json({ group }, { status: 201 });
   } catch (err) {
     console.error("Create group error:", err);
@@ -51,6 +53,7 @@ export async function PATCH(
       data: body,
     });
 
+    broadcastToBoard(group.boardId, "group:updated", { boardId: group.boardId, group });
     return NextResponse.json({ group });
   } catch (err) {
     console.error("Update group error:", err);

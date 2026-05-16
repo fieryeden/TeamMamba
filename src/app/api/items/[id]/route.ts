@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getAuthUser } from "@/lib/session";
 import { fireWebhooks } from "@/lib/webhooks";
 import { createAuditLog } from "@/lib/audit";
+import { broadcastToBoard } from "@/lib/socket";
 
 export async function PATCH(
   req: NextRequest,
