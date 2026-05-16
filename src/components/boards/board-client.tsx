@@ -375,6 +375,10 @@ export function BoardClient({ user, board }: BoardClientProps) {
       return next;
     });
   }, []);
+
+  const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
+
+
   // ─── Real-time socket listeners ──────────────────────
   useBoardSocket(board.id, {
     onItemCreated: (data) => {
@@ -515,6 +519,58 @@ export function BoardClient({ user, board }: BoardClientProps) {
     setSelectedItemIds(new Set());
     setGroups((prev) => prev.map((g) => ({ ...g, items: g.items.filter((i) => !selectedItemIds.has(i.id)) })));
   }, [selectedItemIds, setGroups]);
+  // Global keyboard shortcuts
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      const inInput = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable;
+
+      // Escape — close panels / clear selection / close modals
+      if (e.key === "Escape") {
+        if (selectedItemId) { setSelectedItemId(null); e.preventDefault(); return; }
+        if (selectedItemIds.size > 0) { clearSelection(); e.preventDefault(); return; }
+        if (showColumnModal) { setShowColumnModal(false); e.preventDefault(); return; }
+        if (showAutomationModal) { setShowAutomationModal(false); e.preventDefault(); return; }
+        if (showShortcutsHelp) { setShowShortcutsHelp(false); e.preventDefault(); return; }
+        return;
+      }
+
+      // Ctrl/Cmd + K — focus search
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        const searchInput = document.querySelector<HTMLInputElement>('input[placeholder="Search items"]');
+        if (searchInput) { searchInput.focus(); searchInput.select(); }
+        return;
+      }
+
+      // Ctrl/Cmd + A — select all items
+      if ((e.metaKey || e.ctrlKey) && e.key === "a" && !inInput) {
+        e.preventDefault();
+        const allIds = groups.flatMap((g) => g.items.map((i) => i.id));
+        selectAll(allIds);
+        return;
+      }
+
+      // Delete/Backspace — bulk delete if items selected and not in input
+      if ((e.key === "Delete" || e.key === "Backspace") && selectedItemIds.size > 0 && !inInput) {
+        e.preventDefault();
+        handleBulkDelete();
+        return;
+      }
+
+      // Number keys switch view mode (not in input)
+      if (!inInput && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        if (e.key === "1") { setViewMode("TABLE"); return; }
+        if (e.key === "2") { setViewMode("KANBAN"); return; }
+        if (e.key === "3") { setViewMode("CALENDAR"); return; }
+        if (e.key === "4") { setViewMode("TIMELINE"); return; }
+        if (e.key === "?") { setShowShortcutsHelp((v) => !v); return; }
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [selectedItemId, selectedItemIds, showColumnModal, showAutomationModal, showShortcutsHelp, groups, selectAll, clearSelection, handleBulkDelete]);
+
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
 
   const isFilterActive = useCallback((filter: FilterState) => {
