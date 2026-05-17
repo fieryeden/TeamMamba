@@ -101,6 +101,9 @@ interface Subitem {
 interface Item {
   id: string;
   name: string;
+  recurrenceRule: string | null;
+  color: string | null;
+  icon: string | null;
   position: number;
   groupId: string;
   columnValues: ColumnValue[];
@@ -307,6 +310,9 @@ function formatDuration(totalSeconds: number) {
   if (minutes > 0) return `${minutes}m ${seconds}s`;
   return `${seconds}s`;
 }
+
+const ITEM_COLOR_PRESETS = ["#579bfc", "#00c875", "#fdab3d", "#e2445c", "#a25ddc", "#ff158a", "#037f4c", "#676879"];
+const ITEM_ICON_PRESETS = ["📌", "✅", "⚡", "🚀", "🐞", "📝", "🎯", "🔥", "📦", "🔔"];
 
 function getComparableValue(item: Item, column: Column): string | number {
   const cv = item.columnValues.find((value) => value.column.id === column.id);
@@ -820,6 +826,28 @@ export function BoardClient({ user, board }: BoardClientProps) {
       console.error("Failed to update item name:", err);
     }
   }, [logActivity]);
+
+  const handleUpdateItemFields = useCallback(async (
+    itemId: string,
+    patch: Partial<Pick<Item, "recurrenceRule" | "color" | "icon">>
+  ) => {
+    setGroups((prev) =>
+      prev.map((group) => ({
+        ...group,
+        items: group.items.map((item) => (item.id === itemId ? { ...item, ...patch } : item)),
+      }))
+    );
+
+    try {
+      await fetch(`/api/items/${itemId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+    } catch (err) {
+      console.error("Failed to update item fields:", err);
+    }
+  }, []);
 
   const createItemInGroup = useCallback(async (groupId: string, name: string) => {
     if (!name) return null;
@@ -1611,6 +1639,7 @@ export function BoardClient({ user, board }: BoardClientProps) {
         localActivities={selectedItem ? localActivities[selectedItem.id] ?? [] : []}
         onClose={() => setSelectedItemId(null)}
         onUpdateName={handleUpdateItemName}
+        onUpdateItemFields={handleUpdateItemFields}
         onUpdateValue={handleUpdateValue}
         onUploadFile={handleUploadFile}
         onAddComment={handleAddComment}
@@ -1744,9 +1773,9 @@ function CalendarView({
                       "block w-full truncate rounded bg-mamba-100 px-1.5 py-0.5 text-left text-[10px] text-mamba-800 hover:bg-mamba-200",
                       searchQuery && "ring-1 ring-mamba-400"
                     )}
-                    title={`${item.name} • ${item.groupName}`}
+                    title={`${item.icon ? `${item.icon} ` : ""}${item.name} • ${item.groupName}`}
                   >
-                    {item.name}
+                    {item.icon ? `${item.icon} ` : ""}{item.name}
                   </button>
                 ))}
                 {dayItems.length > 3 && (
@@ -1829,6 +1858,50 @@ function TableView({
     );
   };
 
+  const summaryFormatter = useMemo(
+    () => new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }),
+    []
+  );
+  const visibleItems = useMemo(() => groups.flatMap((group) => group.items), [groups]);
+  const footerSummaryByColumn = useMemo(() => {
+    const summary: Record<string, string> = {};
+    for (const column of columns) {
+      if (column.columnType === "NUMBER") {
+        const values = visibleItems
+          .map((item) => {
+            const raw = item.columnValues.find((entry) => entry.column.id === column.id)?.value;
+            if (typeof raw === "number") return raw;
+            if (typeof raw === "string" && raw.trim() !== "") {
+              const parsed = Number(raw);
+              return Number.isFinite(parsed) ? parsed : null;
+            }
+            return null;
+          })
+          .filter((entry): entry is number => entry != null);
+        const count = values.length;
+        if (!count) {
+          summary[column.id] = "Count 0";
+          continue;
+        }
+        const sum = values.reduce((acc, value) => acc + value, 0);
+        const avg = sum / count;
+        summary[column.id] = `Σ ${summaryFormatter.format(sum)} · Avg ${summaryFormatter.format(avg)} · Count ${summaryFormatter.format(count)} · Min ${summaryFormatter.format(Math.min(...values))} · Max ${summaryFormatter.format(Math.max(...values))}`;
+        continue;
+      }
+
+      if (column.columnType === "STATUS") {
+        const count = visibleItems.reduce((acc, item) => {
+          const value = item.columnValues.find((entry) => entry.column.id === column.id)?.value;
+          if (value == null) return acc;
+          if (typeof value === "string" && value.trim() === "") return acc;
+          return acc + 1;
+        }, 0);
+        summary[column.id] = `Count ${summaryFormatter.format(count)}`;
+      }
+    }
+    return summary;
+  }, [columns, visibleItems, summaryFormatter]);
+
   return (
     <div className="h-full overflow-auto">
       <DragDropContext onDragEnd={handleDragEnd}>
@@ -1891,6 +1964,24 @@ function TableView({
               onToggleItemSelect={onToggleItemSelect}
             />
           ))}
+
+          <tfoot className="sticky bottom-0 z-20">
+            <tr className="bg-muted/60">
+              <td className="w-10 border-t px-2 py-2 text-[11px] text-muted-foreground" />
+              <td className="sticky left-0 min-w-[260px] border-t bg-muted/60 px-3 py-2 text-[11px] font-medium text-muted-foreground">
+                Summary ({summaryFormatter.format(visibleItems.length)} items)
+              </td>
+              {columns.map((column) => (
+                <td
+                  key={`summary-${column.id}`}
+                  className="min-w-[130px] border-t px-2 py-2 text-right text-[11px] text-muted-foreground"
+                >
+                  {footerSummaryByColumn[column.id] ?? "—"}
+                </td>
+              ))}
+              <td className="w-10 border-t px-1 py-2 text-[11px] text-muted-foreground" />
+            </tr>
+          </tfoot>
         </table>
       </DragDropContext>
     </div>
@@ -1979,6 +2070,7 @@ function GroupRows({
                     dragSnapshot.isDragging && "bg-card shadow-lg"
                   )}
                   onClick={() => onSelectItem(item.id)}
+                  style={item.color ? { borderLeft: `3px solid ${item.color}` } : undefined}
                 >
                   <td className="w-10 px-2">
                     <div className="flex items-center gap-1">
@@ -2018,6 +2110,7 @@ function GroupRows({
                         </button>
                       )}
                       <span className={cn("text-sm font-medium", searchQuery && "rounded bg-mamba-100 px-1 py-0.5")}>
+                        {item.icon ? `${item.icon} ` : ""}
                         {item.name}
                       </span>
                       {item._count.comments > 0 && (
@@ -2634,7 +2727,7 @@ function KanbanView({
                               className={cn("kanban-card", searchQuery && "ring-1 ring-mamba-300")}
                               onClick={() => onSelectItem(item.id)}
                             >
-                              <p className="text-left text-sm font-medium">{item.name}</p>
+                              <p className="text-left text-sm font-medium">{item.icon ? `${item.icon} ` : ""}{item.name}</p>
                               <p className="text-left text-[11px] text-muted-foreground">{item.groupName}</p>
                               <div className="mt-2 flex items-center justify-between">
                                 <div className="flex -space-x-1">
@@ -2869,6 +2962,7 @@ function ItemDetailPanel({
   localActivities,
   onClose,
   onUpdateName,
+  onUpdateItemFields,
   onUpdateValue,
   onUploadFile,
   onAddComment,
@@ -2884,6 +2978,7 @@ function ItemDetailPanel({
   localActivities: Array<{ id: string; text: string; createdAt: string }>;
   onClose: () => void;
   onUpdateName: (itemId: string, name: string) => void;
+  onUpdateItemFields: (itemId: string, patch: Partial<Pick<Item, "recurrenceRule" | "color" | "icon">>) => void;
   onUpdateValue: (valueId: string, value: unknown) => void;
   onUploadFile: (itemId: string, columnId: string, file: File) => void;
   onAddComment: (itemId: string, commentText: string, parentId?: string) => void;
@@ -3106,6 +3201,87 @@ function ItemDetailPanel({
           </div>
 
           <div className="flex-1 space-y-5 overflow-auto p-4">
+            <section className="space-y-3">
+              <h3 className="text-sm font-semibold">Item Settings</h3>
+              <div className="space-y-3 rounded-md border p-3">
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">Recurrence</label>
+                  <select
+                    className="h-8 w-full rounded border px-2 text-xs"
+                    value={item.recurrenceRule ?? "NONE"}
+                    onChange={(event) =>
+                      onUpdateItemFields(item.id, {
+                        recurrenceRule: event.target.value === "NONE" ? null : event.target.value,
+                      })
+                    }
+                  >
+                    <option value="NONE">None</option>
+                    <option value="DAILY">Daily</option>
+                    <option value="WEEKLY">Weekly</option>
+                    <option value="MONTHLY">Monthly</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">Color</label>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className={cn(
+                        "rounded border px-2 py-1 text-[10px]",
+                        !item.color && "border-mamba-500 bg-mamba-50 text-mamba-700"
+                      )}
+                      onClick={() => onUpdateItemFields(item.id, { color: null })}
+                    >
+                      None
+                    </button>
+                    {ITEM_COLOR_PRESETS.map((color) => (
+                      <button
+                        key={color}
+                        type="button"
+                        className={cn(
+                          "h-6 w-6 rounded-full border-2",
+                          item.color === color ? "border-foreground" : "border-transparent"
+                        )}
+                        style={{ backgroundColor: color }}
+                        onClick={() => onUpdateItemFields(item.id, { color })}
+                        aria-label={`Set item color ${color}`}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">Icon</label>
+                  <div className="flex flex-wrap gap-1">
+                    <button
+                      type="button"
+                      className={cn(
+                        "rounded border px-2 py-1 text-xs",
+                        !item.icon && "border-mamba-500 bg-mamba-50 text-mamba-700"
+                      )}
+                      onClick={() => onUpdateItemFields(item.id, { icon: null })}
+                    >
+                      None
+                    </button>
+                    {ITEM_ICON_PRESETS.map((emoji) => (
+                      <button
+                        key={emoji}
+                        type="button"
+                        className={cn(
+                          "rounded border px-2 py-1 text-base leading-none",
+                          item.icon === emoji && "border-mamba-500 bg-mamba-50"
+                        )}
+                        onClick={() => onUpdateItemFields(item.id, { icon: emoji })}
+                      >
+                        {emoji}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </section>
+
             <section className="space-y-3">
               <h3 className="text-sm font-semibold">Time Tracking</h3>
               <div className="rounded-md border p-3">

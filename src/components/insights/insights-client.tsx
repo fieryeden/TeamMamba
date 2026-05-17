@@ -6,6 +6,9 @@ import {
   Plus,
   Trash2,
   Pencil,
+  Share2,
+  Copy,
+  Check,
   BarChart3,
   PieChart,
   LineChart,
@@ -48,6 +51,8 @@ type Dashboard = {
   id: string;
   name: string;
   description: string | null;
+  shareEnabled: boolean;
+  shareToken: string | null;
   widgets: Widget[];
 };
 
@@ -117,6 +122,7 @@ export function InsightsClient({ dashboards: initialDashboards, boards, initialD
   const [showCreateDashboard, setShowCreateDashboard] = useState(false);
   const [showRenameDashboard, setShowRenameDashboard] = useState(false);
   const [showWidgetDialog, setShowWidgetDialog] = useState(false);
+  const [showShareDialog, setShowShareDialog] = useState(false);
 
   const [newDashboardName, setNewDashboardName] = useState("");
   const [renameDashboardName, setRenameDashboardName] = useState("");
@@ -126,6 +132,11 @@ export function InsightsClient({ dashboards: initialDashboards, boards, initialD
   const [widgetTitle, setWidgetTitle] = useState("");
   const [widgetBoardId, setWidgetBoardId] = useState("all");
   const [widgetColumnId, setWidgetColumnId] = useState("none");
+  const [shareEnabled, setShareEnabled] = useState(false);
+  const [shareUrl, setShareUrl] = useState("");
+  const [embedCode, setEmbedCode] = useState("");
+  const [shareLoading, setShareLoading] = useState(false);
+  const [copiedShare, setCopiedShare] = useState<"" | "url" | "embed">("");
 
   const activeDashboard = useMemo(
     () => dashboards.find((dashboard) => dashboard.id === activeDashboardId) ?? null,
@@ -199,6 +210,55 @@ export function InsightsClient({ dashboards: initialDashboards, boards, initialD
     const updated = dashboards.filter((d) => d.id !== activeDashboard.id);
     setDashboards(updated);
     setActiveDashboardId(updated[0]?.id ?? "");
+  };
+
+  const openShareDialog = async () => {
+    if (!activeDashboard) return;
+    setShowShareDialog(true);
+    setShareLoading(true);
+    try {
+      const res = await fetch(`/api/dashboards/${activeDashboard.id}/share`);
+      const data = await res.json();
+      if (!res.ok) return;
+      setShareEnabled(Boolean(data.shareEnabled));
+      setShareUrl(data.shareUrl ?? "");
+      setEmbedCode(data.embedCode ?? "");
+    } finally {
+      setShareLoading(false);
+    }
+  };
+
+  const updateShare = async (enabled: boolean, regenerate = false) => {
+    if (!activeDashboard) return;
+    setShareLoading(true);
+    try {
+      const res = await fetch(`/api/dashboards/${activeDashboard.id}/share`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled, regenerate }),
+      });
+      const data = await res.json();
+      if (!res.ok) return;
+      setShareEnabled(Boolean(data.shareEnabled));
+      setShareUrl(data.shareUrl ?? "");
+      setEmbedCode(data.embedCode ?? "");
+      setDashboards((prev) =>
+        prev.map((dashboard) =>
+          dashboard.id === activeDashboard.id
+            ? { ...dashboard, shareEnabled: Boolean(data.shareEnabled), shareToken: data.shareToken ?? null }
+            : dashboard
+        )
+      );
+    } finally {
+      setShareLoading(false);
+    }
+  };
+
+  const copyShareValue = async (type: "url" | "embed", value: string) => {
+    if (!value) return;
+    await navigator.clipboard.writeText(value);
+    setCopiedShare(type);
+    setTimeout(() => setCopiedShare(""), 1500);
   };
 
   const openCreateWidget = () => {
@@ -569,6 +629,15 @@ export function InsightsClient({ dashboards: initialDashboards, boards, initialD
               <Button
                 variant="ghost"
                 size="icon"
+                className="h-8 w-8"
+                onClick={openShareDialog}
+                title="Share dashboard"
+              >
+                <Share2 className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
                 className="h-8 w-8 text-muted-foreground hover:text-destructive"
                 onClick={deleteDashboard}
                 title="Delete dashboard"
@@ -766,6 +835,59 @@ export function InsightsClient({ dashboards: initialDashboards, boards, initialD
             >
               {editingWidget ? "Save" : "Add Widget"}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showShareDialog} onOpenChange={setShowShareDialog}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Share Dashboard</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between rounded-md border p-3">
+              <div>
+                <p className="text-sm font-medium">Public sharing</p>
+                <p className="text-xs text-muted-foreground">Anyone with the link can view this dashboard.</p>
+              </div>
+              <Button
+                size="sm"
+                onClick={() => updateShare(!shareEnabled)}
+                disabled={shareLoading}
+                variant={shareEnabled ? "outline" : "default"}
+              >
+                {shareEnabled ? "Disable" : "Enable"}
+              </Button>
+            </div>
+
+            {shareEnabled && (
+              <>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">Share link</label>
+                  <div className="flex gap-2">
+                    <Input value={shareUrl} readOnly />
+                    <Button variant="outline" size="icon" onClick={() => copyShareValue("url", shareUrl)}>
+                      {copiedShare === "url" ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                    </Button>
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">Embed iframe code</label>
+                  <div className="flex gap-2">
+                    <Input value={embedCode} readOnly />
+                    <Button variant="outline" size="icon" onClick={() => copyShareValue("embed", embedCode)}>
+                      {copiedShare === "embed" ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                    </Button>
+                  </div>
+                </div>
+                <Button variant="outline" size="sm" onClick={() => updateShare(true, true)} disabled={shareLoading}>
+                  Regenerate Link
+                </Button>
+              </>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowShareDialog(false)}>Close</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

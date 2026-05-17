@@ -25,6 +25,7 @@ interface SettingsClientProps {
     emailOnMentions: boolean;
     emailOnAssignments: boolean;
     emailOnDueDates: boolean;
+    twoFactorEnabled: boolean;
     createdAt: string;
   };
   apiTokens: Array<{ id: string; name: string; lastUsed: string | null; createdAt: string }>;
@@ -47,6 +48,12 @@ export function SettingsClient({ user, apiTokens: initialTokens }: SettingsClien
   const [showTokenDialog, setShowTokenDialog] = useState(false);
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [themeSaving, setThemeSaving] = useState(false);
+  const [twoFactorEnabled, setTwoFactorEnabled] = useState(user.twoFactorEnabled);
+  const [twoFactorSetupSecret, setTwoFactorSetupSecret] = useState("");
+  const [twoFactorQrCodeUrl, setTwoFactorQrCodeUrl] = useState("");
+  const [twoFactorCode, setTwoFactorCode] = useState("");
+  const [twoFactorMessage, setTwoFactorMessage] = useState("");
+  const [twoFactorLoading, setTwoFactorLoading] = useState(false);
   const [emailPrefs, setEmailPrefs] = useState({
     emailNotificationsEnabled: user.emailNotificationsEnabled,
     emailOnMentions: user.emailOnMentions,
@@ -174,6 +181,79 @@ export function SettingsClient({ user, apiTokens: initialTokens }: SettingsClien
     }
   };
 
+  const setupTwoFactor = async () => {
+    setTwoFactorLoading(true);
+    setTwoFactorMessage("");
+    try {
+      const res = await fetch("/api/auth/2fa/setup", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        setTwoFactorMessage(data.error ?? "Failed to start setup");
+        return;
+      }
+      setTwoFactorSetupSecret(data.secret ?? "");
+      setTwoFactorQrCodeUrl(data.qrCodeUrl ?? "");
+    } catch {
+      setTwoFactorMessage("Failed to start setup");
+    } finally {
+      setTwoFactorLoading(false);
+    }
+  };
+
+  const verifyTwoFactor = async () => {
+    if (!twoFactorCode.trim()) return;
+    setTwoFactorLoading(true);
+    setTwoFactorMessage("");
+    try {
+      const res = await fetch("/api/auth/2fa/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: twoFactorCode }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setTwoFactorMessage(data.error ?? "Invalid verification code");
+        return;
+      }
+      setTwoFactorEnabled(true);
+      setTwoFactorSetupSecret("");
+      setTwoFactorQrCodeUrl("");
+      setTwoFactorCode("");
+      setTwoFactorMessage("Two-factor authentication is enabled.");
+    } catch {
+      setTwoFactorMessage("Failed to verify code");
+    } finally {
+      setTwoFactorLoading(false);
+    }
+  };
+
+  const disableTwoFactor = async () => {
+    if (!twoFactorCode.trim()) return;
+    setTwoFactorLoading(true);
+    setTwoFactorMessage("");
+    try {
+      const res = await fetch("/api/auth/2fa/disable", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: twoFactorCode }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setTwoFactorMessage(data.error ?? "Invalid verification code");
+        return;
+      }
+      setTwoFactorEnabled(false);
+      setTwoFactorSetupSecret("");
+      setTwoFactorQrCodeUrl("");
+      setTwoFactorCode("");
+      setTwoFactorMessage("Two-factor authentication is disabled.");
+    } catch {
+      setTwoFactorMessage("Failed to disable 2FA");
+    } finally {
+      setTwoFactorLoading(false);
+    }
+  };
+
   return (
     <div className="space-y-6 max-w-3xl">
       <h1 className="text-2xl font-bold flex items-center gap-2">
@@ -186,6 +266,7 @@ export function SettingsClient({ user, apiTokens: initialTokens }: SettingsClien
           <TabsTrigger value="profile"><User className="h-3 w-3 mr-1" /> Profile</TabsTrigger>
           <TabsTrigger value="api"><Key className="h-3 w-3 mr-1" /> API Tokens</TabsTrigger>
           <TabsTrigger value="notifications"><Bell className="h-3 w-3 mr-1" /> Notifications</TabsTrigger>
+          <TabsTrigger value="security"><Shield className="h-3 w-3 mr-1" /> Security</TabsTrigger>
           <TabsTrigger value="appearance"><Palette className="h-3 w-3 mr-1" /> Appearance</TabsTrigger>
         </TabsList>
 
@@ -341,6 +422,73 @@ export function SettingsClient({ user, apiTokens: initialTokens }: SettingsClien
                   />
                 </label>
               ))}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="security" className="mt-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>Two-Factor Authentication (TOTP)</CardTitle>
+              <CardDescription>Add an authenticator app code to your login</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium">Status:</span>
+                <Badge variant={twoFactorEnabled ? "default" : "secondary"}>
+                  {twoFactorEnabled ? "Enabled" : "Disabled"}
+                </Badge>
+              </div>
+
+              {!twoFactorEnabled && !twoFactorQrCodeUrl && (
+                <Button onClick={setupTwoFactor} disabled={twoFactorLoading} className="bg-mamba-600 hover:bg-mamba-700">
+                  {twoFactorLoading ? "Preparing..." : "Set up 2FA"}
+                </Button>
+              )}
+
+              {!twoFactorEnabled && twoFactorQrCodeUrl && (
+                <div className="space-y-3 rounded-lg border p-3">
+                  <p className="text-sm font-medium">Scan this QR in your authenticator app</p>
+                  <img src={twoFactorQrCodeUrl} alt="2FA QR code" className="h-44 w-44 rounded border" />
+                  <p className="text-xs text-muted-foreground break-all">Secret: {twoFactorSetupSecret}</p>
+                  <div className="flex gap-2">
+                    <Input
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      placeholder="Enter 6-digit code"
+                      value={twoFactorCode}
+                      onChange={(event) => setTwoFactorCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                      onKeyDown={(event) => event.key === "Enter" && verifyTwoFactor()}
+                    />
+                    <Button onClick={verifyTwoFactor} disabled={twoFactorLoading || twoFactorCode.length !== 6}>
+                      Verify
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {twoFactorEnabled && (
+                <div className="space-y-2 rounded-lg border p-3">
+                  <p className="text-sm text-muted-foreground">Enter your current code to disable 2FA.</p>
+                  <div className="flex gap-2">
+                    <Input
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      placeholder="Enter 6-digit code"
+                      value={twoFactorCode}
+                      onChange={(event) => setTwoFactorCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                      onKeyDown={(event) => event.key === "Enter" && disableTwoFactor()}
+                    />
+                    <Button variant="destructive" onClick={disableTwoFactor} disabled={twoFactorLoading || twoFactorCode.length !== 6}>
+                      Disable
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {twoFactorMessage && (
+                <p className="text-sm text-muted-foreground">{twoFactorMessage}</p>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

@@ -13,6 +13,8 @@ model User {
   id                        String           @id @default(uuid())
   email                     String           @unique
   passwordHash              String
+  twoFactorSecret           String?
+  twoFactorEnabled          Boolean          @default(false)
   firstName                 String
   lastName                  String
   avatarUrl                 String?
@@ -245,6 +247,9 @@ model Item {
   boardId    String
   groupId    String
   name       String
+  recurrenceRule String?
+  color      String?
+  icon       String?
   position   Int
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
@@ -537,6 +542,8 @@ model Dashboard {
   name        String
   description String?
   ownerId     String
+  shareToken  String?   @unique
+  shareEnabled Boolean  @default(false)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   owner       User      @relation(fields: [ownerId], references: [id], onDelete: Cascade)

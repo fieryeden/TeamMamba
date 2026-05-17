@@ -10,6 +10,8 @@ export function LoginForm() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [totpCode, setTotpCode] = useState("");
+  const [requiresTwoFactor, setRequiresTwoFactor] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -22,11 +24,14 @@ export function LoginForm() {
       const res = await fetch("/api/auth", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, totpCode: requiresTwoFactor ? totpCode : undefined }),
       });
       const data = await res.json();
 
       if (!res.ok) {
+        if (data.requiresTwoFactor) {
+          setRequiresTwoFactor(true);
+        }
         setError(data.error || "Login failed");
         return;
       }
@@ -71,6 +76,19 @@ export function LoginForm() {
               required
             />
           </div>
+          {requiresTwoFactor && (
+            <div className="space-y-2">
+              <label className="text-sm font-medium">2FA Code</label>
+              <Input
+                inputMode="numeric"
+                pattern="[0-9]*"
+                placeholder="123456"
+                value={totpCode}
+                onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                required
+              />
+            </div>
+          )}
           <Button type="submit" className="w-full bg-mamba-600 hover:bg-mamba-700" disabled={loading}>
             {loading ? "Signing in..." : "Sign In"}
           </Button>

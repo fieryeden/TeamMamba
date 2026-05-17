@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getAuthUser } from "@/lib/session";
 import { hashPassword, verifyPassword, signToken } from "@/lib/auth";
+import { verifyTotpToken } from "@/lib/totp";
 import {
   registerSchema,
   loginSchema,
@@ -60,6 +61,7 @@ export async function PUT(req: NextRequest) {
   try {
     const body = await req.json();
     const { email, password } = loginSchema.parse(body);
+    const totpCode = typeof body.totpCode === "string" ? body.totpCode : "";
 
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user) {
@@ -69,6 +71,18 @@ export async function PUT(req: NextRequest) {
     const valid = await verifyPassword(password, user.passwordHash);
     if (!valid) {
       return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
+    }
+
+    if (user.twoFactorEnabled) {
+      if (!totpCode) {
+        return NextResponse.json(
+          { error: "2FA code required", requiresTwoFactor: true },
+          { status: 401 }
+        );
+      }
+      if (!user.twoFactorSecret || !verifyTotpToken(user.twoFactorSecret, totpCode)) {
+        return NextResponse.json({ error: "Invalid 2FA code", requiresTwoFactor: true }, { status: 401 });
+      }
     }
 
     await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });

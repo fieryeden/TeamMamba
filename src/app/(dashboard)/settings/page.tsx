@@ -13,6 +13,7 @@ export default async function SettingsPage() {
       id: true, email: true, firstName: true, lastName: true,
       avatarUrl: true, role: true, timezone: true, createdAt: true, themePreference: true,
       emailNotificationsEnabled: true, emailOnMentions: true, emailOnAssignments: true, emailOnDueDates: true,
+      twoFactorEnabled: true,
     },
   });
 

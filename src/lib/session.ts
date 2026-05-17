@@ -24,6 +24,7 @@ export async function getAuthUser() {
       themePreference: true,
       onboardingCompleted: true,
       timezone: true,
+      twoFactorEnabled: true,
     },
   });
 
