@@ -5,6 +5,7 @@ import { fireWebhooks } from "@/lib/webhooks";
 import { createAuditLog } from "@/lib/audit";
 import { broadcastToBoard } from "@/lib/socket";
 import { processAutomation } from "@/lib/automation-engine";
+import { recordItemVersion } from "@/lib/version-history";
 
 export async function PATCH(
   req: NextRequest,
@@ -18,9 +19,30 @@ export async function PATCH(
     const body = await req.json();
     const existingItem = await prisma.item.findUnique({
       where: { id },
-      select: { id: true, boardId: true, groupId: true, name: true },
+      select: {
+        id: true,
+        boardId: true,
+        groupId: true,
+        name: true,
+        recurrenceRule: true,
+        color: true,
+        icon: true,
+        position: true,
+      },
     });
     if (!existingItem) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+    const trackedFields = ["name", "groupId", "recurrenceRule", "color", "icon", "position"] as const;
+    for (const field of trackedFields) {
+      if (!(field in body)) continue;
+      await recordItemVersion(
+        existingItem.id,
+        field,
+        existingItem[field],
+        body[field],
+        user.id
+      );
+    }
 
     const item = await prisma.item.update({
       where: { id },

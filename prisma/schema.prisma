@@ -47,6 +47,9 @@ model User {
   dashboards         Dashboard[]
   docs               Doc[]             @relation("DocAuthor")
   auditLogs          AuditLog[]
+  createdBoardViews  BoardView[]       @relation("BoardViewCreator")
+  itemVersions       ItemVersion[]     @relation("ItemVersionUser")
+  docEmbeds          DocEmbed[]        @relation("DocEmbedCreator")
 
   @@map("users")
 }
@@ -138,6 +141,7 @@ model Board {
   members     BoardMember[]
   automations Automation[]
   views       BoardView[]
+  docEmbeds   DocEmbed[]
   activities  Activity[]
   guestAccess GuestAccess[]
   milestones  Milestone[]
@@ -262,6 +266,8 @@ model Item {
   updates    Update[]
   subitems   Subitem[]
   timeEntries TimeEntry[]
+  versions   ItemVersion[]
+  docEmbeds  DocEmbed[]
 
   // Dependencies
   dependenciesFrom Dependency[] @relation("DependencyFrom")
@@ -478,16 +484,30 @@ enum AutomationAction {
 model BoardView {
   id        String    @id @default(uuid())
   boardId   String
-  userId    String
   name      String
-  viewKind  BoardKind @default(TABLE)
-  config    Json?
+  filters   Json
   isDefault Boolean   @default(false)
+  createdById String
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   board     Board     @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  createdBy User      @relation("BoardViewCreator", fields: [createdById], references: [id], onDelete: Cascade)
 
   @@map("board_views")
+}
+
+model ItemVersion {
+  id          String   @id @default(uuid())
+  itemId       String
+  field        String
+  oldValue     String?
+  newValue     String?
+  changedById  String
+  createdAt    DateTime @default(now())
+  item         Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  changedBy    User     @relation("ItemVersionUser", fields: [changedById], references: [id], onDelete: Cascade)
+
+  @@map("item_versions")
 }
 
 // ─── TEMPLATES ──────────────────────────────────────────
@@ -595,8 +615,26 @@ model Doc {
   updatedAt    DateTime  @updatedAt
   workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   createdBy    User      @relation("DocAuthor", fields: [createdById], references: [id], onDelete: Cascade)
+  embeds       DocEmbed[]
 
   @@map("docs")
+}
+
+model DocEmbed {
+  id          String   @id @default(uuid())
+  docId       String
+  boardId     String
+  itemId      String?
+  embedType   String
+  embedData   Json
+  createdById String
+  createdAt   DateTime @default(now())
+  doc         Doc      @relation(fields: [docId], references: [id], onDelete: Cascade)
+  board       Board    @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  item        Item?    @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  createdBy   User     @relation("DocEmbedCreator", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@map("doc_embeds")
 }
 
 // ─── MILESTONES ─────────────────────────────────────────

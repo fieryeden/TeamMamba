@@ -39,7 +39,7 @@ export async function GET(
         members: {
           include: { user: { select: { id: true, firstName: true, lastName: true, avatarUrl: true } } },
         },
-        views: { where: { userId: user.id }, orderBy: { isDefault: "desc" } },
+        views: { where: { createdById: user.id }, orderBy: { isDefault: "desc" } },
         automations: { where: { isEnabled: true } },
       },
     });

@@ -83,6 +83,30 @@ interface ItemActivity {
   user: { id: string; firstName: string; lastName: string; avatarUrl: string | null };
 }
 
+interface ItemVersionEntry {
+  id: string;
+  field: string;
+  oldValue: string | null;
+  newValue: string | null;
+  createdAt: string | Date;
+  changedBy: { id: string; firstName: string; lastName: string; avatarUrl: string | null };
+}
+
+interface BoardDocEmbed {
+  id: string;
+  embedType: string;
+  embedData: Record<string, unknown>;
+  createdAt: string | Date;
+  doc: {
+    id: string;
+    title: string;
+    icon: string | null;
+    content: unknown;
+    updatedAt: string | Date;
+    workspaceId: string;
+  };
+}
+
 interface TimeEntry {
   id: string;
   startTime: string | Date;
@@ -141,13 +165,14 @@ interface BoardMember {
 interface SavedBoardView {
   id: string;
   name: string;
-  viewKind: ViewMode;
-  config: {
-    sortState?: SortState;
-    collapsedGroups?: string[];
-    filters?: FilterState[];
+  filters: {
+    logic: FilterLogic;
+    conditions: FilterState[];
     searchQuery?: string;
-  } | null;
+    viewMode?: ViewMode;
+  };
+  isDefault: boolean;
+  createdBy?: { id: string; firstName: string; lastName: string; avatarUrl: string | null };
 }
 
 interface BoardClientProps {
@@ -168,24 +193,8 @@ interface BoardClientProps {
 
 type ViewMode = "TABLE" | "KANBAN" | "CALENDAR" | "TIMELINE";
 type SortState = { columnId: string; direction: "asc" | "desc" } | null;
-type FilterOperator =
-  | "is"
-  | "is_not"
-  | "contains"
-  | "not_contains"
-  | "is_empty"
-  | "is_not_empty"
-  | "eq"
-  | "neq"
-  | "gt"
-  | "lt"
-  | "gte"
-  | "lte"
-  | "is_before"
-  | "is_after"
-  | "is_between"
-  | "is_checked"
-  | "is_not_checked";
+type FilterOperator = "equals" | "not_equals" | "contains" | "is_empty" | "is_not_empty";
+type FilterLogic = "AND" | "OR";
 
 interface FilterState {
   id: string;
@@ -199,70 +208,23 @@ interface FilterOperatorOption {
   value: FilterOperator;
   label: string;
   needsValue?: boolean;
-  needsSecondValue?: boolean;
 }
 
 const textOperators: FilterOperatorOption[] = [
-  { value: "is", label: "is", needsValue: true },
-  { value: "is_not", label: "is not", needsValue: true },
+  { value: "equals", label: "equals", needsValue: true },
+  { value: "not_equals", label: "not equals", needsValue: true },
   { value: "contains", label: "contains", needsValue: true },
-  { value: "not_contains", label: "doesn't contain", needsValue: true },
   { value: "is_empty", label: "is empty" },
   { value: "is_not_empty", label: "is not empty" },
-];
-
-const numberOperators: FilterOperatorOption[] = [
-  { value: "eq", label: "=", needsValue: true },
-  { value: "neq", label: "≠", needsValue: true },
-  { value: "gt", label: ">", needsValue: true },
-  { value: "lt", label: "<", needsValue: true },
-  { value: "gte", label: "≥", needsValue: true },
-  { value: "lte", label: "≤", needsValue: true },
-  { value: "is_empty", label: "is empty" },
-  { value: "is_not_empty", label: "is not empty" },
-];
-
-const dateOperators: FilterOperatorOption[] = [
-  { value: "is", label: "is", needsValue: true },
-  { value: "is_before", label: "is before", needsValue: true },
-  { value: "is_after", label: "is after", needsValue: true },
-  { value: "is_between", label: "is between", needsValue: true, needsSecondValue: true },
-  { value: "is_empty", label: "is empty" },
-  { value: "is_not_empty", label: "is not empty" },
-];
-
-const checkboxOperators: FilterOperatorOption[] = [
-  { value: "is_checked", label: "is checked" },
-  { value: "is_not_checked", label: "is not checked" },
 ];
 
 function getFilterOperators(columnType: string): FilterOperatorOption[] {
-  if (columnType === "STATUS" || columnType === "PEOPLE") {
-    return [
-      { value: "is", label: "is", needsValue: true },
-      { value: "is_not", label: "is not", needsValue: true },
-    ];
-  }
-  if (columnType === "NUMBER" || columnType === "PROGRESS" || columnType === "RATING") {
-    return numberOperators;
-  }
-  if (columnType === "DATE" || columnType === "TIMELINE") {
-    return dateOperators;
-  }
-  if (columnType === "CHECKBOX") {
-    return checkboxOperators;
-  }
-  if (columnType === "TAGS") {
-    return [
-      { value: "contains", label: "contains", needsValue: true },
-      { value: "not_contains", label: "doesn't contain", needsValue: true },
-    ];
-  }
+  if (columnType === "CHECKBOX") return textOperators.filter((entry) => entry.value !== "contains");
   return textOperators;
 }
 
 function getDefaultFilter(columnId: string, columnType: string): FilterState {
-  const operator = getFilterOperators(columnType)[0]?.value ?? "contains";
+  const operator = getFilterOperators(columnType)[0]?.value ?? "equals";
   return { id: crypto.randomUUID(), columnId, operator, value: "" };
 }
 
@@ -361,6 +323,7 @@ export function BoardClient({ user, board }: BoardClientProps) {
   const [savedViews, setSavedViews] = useState<SavedBoardView[]>([]);
   const [selectedViewId, setSelectedViewId] = useState("");
   const [filters, setFilters] = useState<FilterState[]>([]);
+  const [filterLogic, setFilterLogic] = useState<FilterLogic>("AND");
   const [searchQuery, setSearchQuery] = useState("");
 
   const resizeRef = useRef<{ columnId: string; startX: number; startWidth: number } | null>(null);
@@ -585,7 +548,6 @@ export function BoardClient({ user, board }: BoardClientProps) {
     const operator = getFilterOperators(column.columnType).find((entry) => entry.value === filter.operator);
     if (!operator) return false;
     if (operator.needsValue && !filter.value.trim()) return false;
-    if (operator.needsSecondValue && !filter.valueTo?.trim()) return false;
     return true;
   }, [columns]);
 
@@ -604,9 +566,8 @@ export function BoardClient({ user, board }: BoardClientProps) {
     if (!column) return true;
     const cv = item.columnValues.find((entry) => entry.column.id === column.id);
     const value = cv?.value;
-    const textValue = asString(value).toLowerCase();
-    const rawFilterValue = filter.value.trim();
-    const filterText = rawFilterValue.toLowerCase();
+    const textValue = asString(value).toLowerCase().trim();
+    const rawFilterValue = filter.value.trim().toLowerCase();
 
     if (filter.operator === "is_empty") {
       if (column.columnType === "PEOPLE") return item.assignees.length === 0;
@@ -619,84 +580,28 @@ export function BoardClient({ user, board }: BoardClientProps) {
       return !(value == null || asString(value).trim() === "" || (Array.isArray(value) && value.length === 0));
     }
 
-    if (column.columnType === "CHECKBOX") {
-      const checked = Boolean(value);
-      return filter.operator === "is_checked" ? checked : !checked;
-    }
-
     if (column.columnType === "PEOPLE") {
-      const hasUser = item.assignees.some((assignee) => assignee.user.id === rawFilterValue);
-      return filter.operator === "is" ? hasUser : !hasUser;
-    }
-
-    if (column.columnType === "STATUS") {
-      const statusIndex = typeof value === "number" ? String(value) : "0";
-      return filter.operator === "is" ? statusIndex === rawFilterValue : statusIndex !== rawFilterValue;
-    }
-
-    if (column.columnType === "NUMBER" || column.columnType === "PROGRESS" || column.columnType === "RATING") {
-      const numericValue = typeof value === "number" ? value : Number(value);
-      const filterNumber = Number(rawFilterValue);
-      if (Number.isNaN(numericValue) || Number.isNaN(filterNumber)) return false;
-      if (filter.operator === "eq") return numericValue === filterNumber;
-      if (filter.operator === "neq") return numericValue !== filterNumber;
-      if (filter.operator === "gt") return numericValue > filterNumber;
-      if (filter.operator === "lt") return numericValue < filterNumber;
-      if (filter.operator === "gte") return numericValue >= filterNumber;
-      if (filter.operator === "lte") return numericValue <= filterNumber;
+      const matchesId = item.assignees.some((assignee) => assignee.user.id.toLowerCase() === rawFilterValue);
+      const assigneeValues = item.assignees
+        .map((assignee) => `${assignee.user.firstName} ${assignee.user.lastName}`.toLowerCase())
+        .join(", ");
+      if (filter.operator === "contains") return assigneeValues.includes(rawFilterValue) || matchesId;
+      if (filter.operator === "equals") return assigneeValues === rawFilterValue || matchesId;
+      if (filter.operator === "not_equals") return assigneeValues !== rawFilterValue && !matchesId;
       return true;
     }
 
-    if (column.columnType === "DATE" || column.columnType === "TIMELINE") {
-      const filterDate = rawFilterValue ? new Date(rawFilterValue) : null;
-      const filterDateTo = filter.valueTo ? new Date(filter.valueTo) : null;
-      if ((filterDate && Number.isNaN(filterDate.getTime())) || (filterDateTo && Number.isNaN(filterDateTo.getTime()))) {
-        return false;
-      }
-
-      if (column.columnType === "TIMELINE") {
-        const range = getTimelineRange(value);
-        if (!range) return false;
-        const startKey = toDateKey(range.start);
-        const endKey = toDateKey(range.end);
-        const targetKey = filterDate ? toDateKey(filterDate) : 0;
-        if (filter.operator === "is") return startKey === targetKey || endKey === targetKey;
-        if (filter.operator === "is_before") return endKey < targetKey;
-        if (filter.operator === "is_after") return startKey > targetKey;
-        if (filter.operator === "is_between" && filterDate && filterDateTo) {
-          const from = Math.min(toDateKey(filterDate), toDateKey(filterDateTo));
-          const to = Math.max(toDateKey(filterDate), toDateKey(filterDateTo));
-          return startKey <= to && endKey >= from;
-        }
-        return true;
-      }
-
-      if (typeof value !== "string") return false;
-      const itemDate = new Date(value);
-      if (Number.isNaN(itemDate.getTime())) return false;
-      const itemKey = toDateKey(itemDate);
-      const targetKey = filterDate ? toDateKey(filterDate) : 0;
-      if (filter.operator === "is") return itemKey === targetKey;
-      if (filter.operator === "is_before") return itemKey < targetKey;
-      if (filter.operator === "is_after") return itemKey > targetKey;
-      if (filter.operator === "is_between" && filterDate && filterDateTo) {
-        const from = Math.min(toDateKey(filterDate), toDateKey(filterDateTo));
-        const to = Math.max(toDateKey(filterDate), toDateKey(filterDateTo));
-        return itemKey >= from && itemKey <= to;
-      }
+    if (column.columnType === "CHECKBOX") {
+      const checkboxLabel = Boolean(value) ? "true" : "false";
+      if (filter.operator === "equals") return checkboxLabel === rawFilterValue;
+      if (filter.operator === "not_equals") return checkboxLabel !== rawFilterValue;
+      if (filter.operator === "contains") return checkboxLabel.includes(rawFilterValue);
       return true;
     }
 
-    if (column.columnType === "TAGS") {
-      const tags = Array.isArray(value) ? value.map((entry) => String(entry).toLowerCase()) : [];
-      const contains = tags.some((tag) => tag.includes(filterText));
-      return filter.operator === "contains" ? contains : !contains;
-    }
-
-    if (filter.operator === "is") return textValue === filterText;
-    if (filter.operator === "is_not") return textValue !== filterText;
-    if (filter.operator === "contains") return textValue.includes(filterText);
-    if (filter.operator === "not_contains") return !textValue.includes(filterText);
+    if (filter.operator === "equals") return textValue === rawFilterValue;
+    if (filter.operator === "not_equals") return textValue !== rawFilterValue;
+    if (filter.operator === "contains") return textValue.includes(rawFilterValue);
     return true;
   }, [columns]);
 
@@ -705,10 +610,12 @@ export function BoardClient({ user, board }: BoardClientProps) {
       ...group,
       items: group.items.filter((item) => {
         if (!matchesSearch(item)) return false;
-        return activeFilters.every((filter) => matchesFilter(item, filter));
+        if (!activeFilters.length) return true;
+        if (filterLogic === "AND") return activeFilters.every((filter) => matchesFilter(item, filter));
+        return activeFilters.some((filter) => matchesFilter(item, filter));
       }),
     }));
-  }, [activeFilters, groups, matchesFilter, matchesSearch]);
+  }, [activeFilters, filterLogic, groups, matchesFilter, matchesSearch]);
 
   const selectedItem = useMemo(() => {
     if (!selectedItemId) return null;
@@ -1166,7 +1073,7 @@ export function BoardClient({ user, board }: BoardClientProps) {
   }, [columns]);
 
   useEffect(() => {
-    fetch(`/api/board-views?boardId=${board.id}`)
+    fetch(`/api/boards/${board.id}/views`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => setSavedViews(data?.views ?? []))
       .catch(() => {});
@@ -1176,17 +1083,15 @@ export function BoardClient({ user, board }: BoardClientProps) {
     const name = window.prompt("Name this view");
     if (!name?.trim()) return;
     const payload = {
-      boardId: board.id,
       name: name.trim(),
-      viewKind: viewMode,
-      config: {
-        sortState,
-        collapsedGroups: groups.filter((group) => group.isCollapsed).map((group) => group.id),
-        filters,
+      filters: {
+        logic: filterLogic,
+        conditions: filters,
         searchQuery,
+        viewMode,
       },
     };
-    const res = await fetch("/api/board-views", {
+    const res = await fetch(`/api/boards/${board.id}/views`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -1201,17 +1106,11 @@ export function BoardClient({ user, board }: BoardClientProps) {
     setSelectedViewId(viewId);
     const view = savedViews.find((entry) => entry.id === viewId);
     if (!view) return;
-    setViewMode(view.viewKind);
-    setSortState(view.config?.sortState ?? null);
-    setFilters(view.config?.filters ?? []);
-    setSearchQuery(view.config?.searchQuery ?? "");
-    const collapsed = new Set(view.config?.collapsedGroups ?? []);
-    setGroups((prev) =>
-      prev.map((group) => ({
-        ...group,
-        isCollapsed: collapsed.has(group.id),
-      }))
-    );
+    setViewMode(view.filters?.viewMode ?? "TABLE");
+    setSortState(null);
+    setFilterLogic(view.filters?.logic ?? "AND");
+    setFilters(view.filters?.conditions ?? []);
+    setSearchQuery(view.filters?.searchQuery ?? "");
   };
 
   const handleExportBoard = async () => {
@@ -1228,25 +1127,25 @@ export function BoardClient({ user, board }: BoardClientProps) {
   };
 
   const handleImportBoard = async (file: File) => {
-    const text = await file.text();
-    let parsed: unknown = null;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
+    const formData = new FormData();
+    formData.append("boardId", board.id);
+    formData.append("file", file);
+    const res = await fetch("/api/boards/import-csv", {
+      method: "POST",
+      body: formData,
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      window.alert(data.error ?? "Import failed");
       return;
     }
-
-    const res = await fetch("/api/boards/import", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        workspaceId: board.workspace.id,
-        board: parsed,
-      }),
-    });
-    if (!res.ok) return;
-    const data = await res.json();
-    window.location.href = `/board/${data.board.id}`;
+    const summary = [
+      `Rows imported: ${data.rowsImported ?? 0}`,
+      `Columns created: ${Array.isArray(data.columnsCreated) ? data.columnsCreated.length : 0}`,
+      `Errors: ${Array.isArray(data.errors) ? data.errors.length : 0}`,
+    ].join("\\n");
+    window.alert(summary);
+    window.location.reload();
   };
 
   const handleShareBoard = async () => {
@@ -1344,10 +1243,20 @@ export function BoardClient({ user, board }: BoardClientProps) {
               </PopoverTrigger>
               <PopoverContent align="start" className="w-[560px] space-y-3">
                 <div className="flex items-center justify-between">
-                  <p className="text-sm font-semibold">Filters (AND)</p>
-                  <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setFilters([])}>
-                    Clear all
-                  </Button>
+                  <p className="text-sm font-semibold">Filters</p>
+                  <div className="flex items-center gap-2">
+                    <select
+                      className="h-7 rounded-md border bg-background px-2 text-xs"
+                      value={filterLogic}
+                      onChange={(event) => setFilterLogic(event.target.value as FilterLogic)}
+                    >
+                      <option value="AND">Match all (AND)</option>
+                      <option value="OR">Match any (OR)</option>
+                    </select>
+                    <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setFilters([])}>
+                      Clear all
+                    </Button>
+                  </div>
                 </div>
 
                 {filters.length === 0 && (
@@ -1360,9 +1269,7 @@ export function BoardClient({ user, board }: BoardClientProps) {
                   const operators = getFilterOperators(selectedColumn.columnType);
                   const operator = operators.find((entry) => entry.value === filter.operator) ?? operators[0];
                   const needsValue = Boolean(operator?.needsValue);
-                  const needsSecond = Boolean(operator?.needsSecondValue);
                   const statusMeta = getStatusMeta(selectedColumn);
-                  const isDate = selectedColumn.columnType === "DATE" || selectedColumn.columnType === "TIMELINE";
 
                   return (
                     <div key={filter.id} className="grid grid-cols-[1fr_0.8fr_1fr_auto] items-center gap-2">
@@ -1377,7 +1284,6 @@ export function BoardClient({ user, board }: BoardClientProps) {
                             columnId: nextDefault.columnId,
                             operator: nextDefault.operator,
                             value: "",
-                            valueTo: "",
                           });
                         }}
                       >
@@ -1428,22 +1334,12 @@ export function BoardClient({ user, board }: BoardClientProps) {
                             ))}
                           </select>
                         ) : (
-                          <div className="flex items-center gap-1">
-                            <Input
-                              type={isDate ? "date" : selectedColumn.columnType === "NUMBER" || selectedColumn.columnType === "PROGRESS" || selectedColumn.columnType === "RATING" ? "number" : "text"}
-                              value={filter.value}
-                              onChange={(event) => updateFilterRow(filter.id, { value: event.target.value })}
-                              className="h-8 text-xs"
-                            />
-                            {needsSecond && (
-                              <Input
-                                type="date"
-                                value={filter.valueTo ?? ""}
-                                onChange={(event) => updateFilterRow(filter.id, { valueTo: event.target.value })}
-                                className="h-8 text-xs"
-                              />
-                            )}
-                          </div>
+                          <Input
+                            type={selectedColumn.columnType === "NUMBER" || selectedColumn.columnType === "PROGRESS" || selectedColumn.columnType === "RATING" ? "number" : "text"}
+                            value={filter.value}
+                            onChange={(event) => updateFilterRow(filter.id, { value: event.target.value })}
+                            className="h-8 text-xs"
+                          />
                         )
                       ) : (
                         <div className="text-xs text-muted-foreground">No value needed</div>
@@ -1501,7 +1397,7 @@ export function BoardClient({ user, board }: BoardClientProps) {
               Export
             </Button>
             <Button variant="ghost" size="sm" className="h-8" onClick={() => importInputRef.current?.click()}>
-              Import
+              Import CSV/XLSX
             </Button>
             <Button variant="ghost" size="sm" className="h-8" onClick={handleShareBoard}>
               Share
@@ -1509,7 +1405,7 @@ export function BoardClient({ user, board }: BoardClientProps) {
             <input
               ref={importInputRef}
               type="file"
-              accept="application/json"
+              accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
               className="hidden"
               onChange={(event) => {
                 const file = event.target.files?.[0];
@@ -1627,6 +1523,8 @@ export function BoardClient({ user, board }: BoardClientProps) {
 
       <ItemDetailPanel
         user={user}
+        boardId={board.id}
+        workspaceId={board.workspace.id}
         item={selectedItem}
         groupName={selectedItem ? groupById[selectedItem.groupId]?.name ?? "" : ""}
         columns={columns}
@@ -2954,6 +2852,8 @@ function TimelineView({
 
 function ItemDetailPanel({
   user,
+  boardId,
+  workspaceId,
   item,
   groupName,
   columns,
@@ -2970,6 +2870,8 @@ function ItemDetailPanel({
   onDelete,
 }: {
   user: { id: string; firstName: string; lastName: string };
+  boardId: string;
+  workspaceId: string;
   item: Item | null;
   groupName: string;
   columns: Column[];
@@ -3004,10 +2906,17 @@ function ItemDetailPanel({
   const [dependencyType, setDependencyType] = useState("FINISH_TO_START");
   const [subitems, setSubitems] = useState<Subitem[]>([]);
   const [newSubitemName, setNewSubitemName] = useState("");
+  const [detailTab, setDetailTab] = useState<"comments" | "activity" | "versions" | "docs">("comments");
+  const [itemVersions, setItemVersions] = useState<ItemVersionEntry[]>([]);
+  const [docEmbeds, setDocEmbeds] = useState<BoardDocEmbed[]>([]);
+  const [workspaceDocs, setWorkspaceDocs] = useState<Array<{ id: string; title: string; icon: string | null }>>([]);
+  const [selectedDocId, setSelectedDocId] = useState("");
 
   useEffect(() => {
     setCommentText("");
     setReplyingTo(null);
+    setDetailTab("comments");
+    setSelectedDocId("");
   }, [item?.id]);
 
   useEffect(() => {
@@ -3016,6 +2925,8 @@ function ItemDetailPanel({
       setTimeTotalSeconds(0);
       setDependencies([]);
       setSubitems([]);
+      setItemVersions([]);
+      setDocEmbeds([]);
       return;
     }
     setTimeEntries(item.timeEntries ?? []);
@@ -3041,7 +2952,22 @@ function ItemDetailPanel({
       .then((data) => setDependencies(data?.dependencies ?? []))
       .catch(() => {});
     setSubitems(item.subitems ?? []);
-  }, [item]);
+
+    fetch(`/api/items/${item.id}/versions`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => setItemVersions(data?.versions ?? []))
+      .catch(() => {});
+
+    fetch(`/api/boards/${boardId}/doc-embeds?itemId=${item.id}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => setDocEmbeds(data?.embeds ?? []))
+      .catch(() => {});
+
+    fetch(`/api/docs?workspaceId=${workspaceId}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => setWorkspaceDocs((data?.docs ?? []).map((doc: { id: string; title: string; icon: string | null }) => ({ id: doc.id, title: doc.title, icon: doc.icon }))))
+      .catch(() => {});
+  }, [boardId, item, workspaceId]);
 
   useEffect(() => {
     const runningEntry = timeEntries.find((entry) => entry.isRunning);
@@ -3160,6 +3086,48 @@ function ItemDetailPanel({
       if (!res.ok) return;
       const data = await res.json();
       setSubitems((prev) => prev.map((entry) => (entry.id === subitemId ? data.subitem : entry)));
+    } catch {
+      // ignore
+    }
+  };
+
+  const extractDocText = (node: unknown): string => {
+    if (!node || typeof node !== "object") return "";
+    const entry = node as Record<string, unknown>;
+    if (typeof entry.text === "string") return entry.text;
+    if (Array.isArray(entry.content)) return entry.content.map((child) => extractDocText(child)).join(" ");
+    return "";
+  };
+
+  const handleLinkDoc = async () => {
+    if (!item || !selectedDocId) return;
+    try {
+      const res = await fetch(`/api/boards/${boardId}/doc-embeds`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          docId: selectedDocId,
+          itemId: item.id,
+          embedType: "ITEM_DOC",
+          embedData: {},
+        }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      setDocEmbeds((prev) => [data.embed, ...prev]);
+      setSelectedDocId("");
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleRemoveDocEmbed = async (embedId: string) => {
+    try {
+      const res = await fetch(`/api/boards/${boardId}/doc-embeds?embedId=${embedId}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) return;
+      setDocEmbeds((prev) => prev.filter((entry) => entry.id !== embedId));
     } catch {
       // ignore
     }
@@ -3463,111 +3431,207 @@ function ItemDetailPanel({
               })}
             </section>
 
-            <section className="space-y-3">
-              <h3 className="text-sm font-semibold">Comments</h3>
-              <div className="space-y-2 rounded-md border p-2">
-                <div className="flex gap-2">
-                  <Input
-                    placeholder={replyingTo ? "Write a reply" : "Write an update"}
-                    value={commentText}
-                    onChange={(event) => setCommentText(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key !== "Enter") return;
-                      onAddComment(item.id, commentText, replyingTo ?? undefined);
-                      setCommentText("");
-                      setReplyingTo(null);
-                    }}
-                    className="h-8 text-xs"
-                  />
-                  <Button
-                    size="sm"
-                    className="h-8 bg-mamba-600 hover:bg-mamba-700"
-                    onClick={() => {
-                      onAddComment(item.id, commentText, replyingTo ?? undefined);
-                      setCommentText("");
-                      setReplyingTo(null);
-                    }}
-                  >
-                    Send
-                  </Button>
-                </div>
-
-                {rootComments.length ? (
-                  rootComments.map((comment) => (
-                    <div key={comment.id} className="space-y-1 rounded bg-muted/40 px-2 py-1.5">
-                      <p className="text-xs">{comment.body}</p>
-                      <p className="text-[10px] text-muted-foreground">
-                        {comment.user.firstName} {comment.user.lastName} • {formatRelativeTime(comment.createdAt)}
-                      </p>
-                      <div className="flex items-center gap-1">
-                        {["👍", "❤️", "🎉", "👀"].map((emoji) => {
-                          const active = (comment.reactions ?? []).some(
-                            (reaction) => reaction.userId === user.id && reaction.emoji === emoji
-                          );
-                          const count = (comment.reactions ?? []).filter((reaction) => reaction.emoji === emoji).length;
-                          return (
-                            <button
-                              key={`${comment.id}-${emoji}`}
-                              className={cn(
-                                "rounded border px-1.5 py-0.5 text-[10px]",
-                                active && "border-mamba-500 bg-mamba-50 text-mamba-700"
-                              )}
-                              onClick={() => onToggleCommentReaction(item.id, comment.id, emoji, active)}
-                            >
-                              {emoji} {count > 0 ? count : ""}
-                            </button>
-                          );
-                        })}
-                        <button
-                          className="ml-2 text-[10px] text-mamba-700"
-                          onClick={() => setReplyingTo(comment.id)}
-                        >
-                          Reply
-                        </button>
-                      </div>
-
-                      {(repliesByParent[comment.id] ?? []).length > 0 && (
-                        <div className="space-y-1 border-l pl-2">
-                          {(repliesByParent[comment.id] ?? []).map((reply) => (
-                            <div key={reply.id} className="rounded bg-background/80 px-2 py-1">
-                              <p className="text-xs">{reply.body}</p>
-                              <p className="text-[10px] text-muted-foreground">
-                                {reply.user.firstName} {reply.user.lastName} • {formatRelativeTime(reply.createdAt)}
-                              </p>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ))
-                ) : (
-                  <p className="text-xs text-muted-foreground">No comments yet</p>
-                )}
-              </div>
-            </section>
-
             <section className="space-y-2">
-              <h3 className="text-sm font-semibold">Updates & Activity</h3>
-              <div className="space-y-2 rounded-md border p-2">
-                {item.activities?.map((activity) => (
-                  <p key={activity.id} className="text-xs text-muted-foreground">
-                    {activity.user.firstName} {activity.user.lastName} • {activity.action.replace(/_/g, " ").toLowerCase()} • {formatRelativeTime(activity.createdAt)}
-                  </p>
+              <div className="flex items-center gap-2">
+                {(["comments", "activity", "versions", "docs"] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    className={cn(
+                      "rounded border px-2 py-1 text-xs capitalize",
+                      detailTab === tab
+                        ? "border-mamba-500 bg-mamba-50 text-mamba-700"
+                        : "border-border text-muted-foreground hover:text-foreground"
+                    )}
+                    onClick={() => setDetailTab(tab)}
+                  >
+                    {tab === "versions" ? "Version History" : tab}
+                  </button>
                 ))}
-                {item.updates?.map((update) => (
-                  <p key={update.id} className="text-xs text-muted-foreground">
-                    {update.user.firstName} {update.user.lastName}: {update.body}
-                  </p>
-                ))}
-                {localActivities.map((entry) => (
-                  <p key={entry.id} className="text-xs text-muted-foreground">
-                    You • {entry.text} • {formatRelativeTime(entry.createdAt)}
-                  </p>
-                ))}
-                {!item.activities?.length && !item.updates?.length && !localActivities.length && (
-                  <p className="text-xs text-muted-foreground">No activity yet</p>
-                )}
               </div>
+
+              {detailTab === "comments" && (
+                <div className="space-y-2 rounded-md border p-2">
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder={replyingTo ? "Write a reply" : "Write an update"}
+                      value={commentText}
+                      onChange={(event) => setCommentText(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter") return;
+                        onAddComment(item.id, commentText, replyingTo ?? undefined);
+                        setCommentText("");
+                        setReplyingTo(null);
+                      }}
+                      className="h-8 text-xs"
+                    />
+                    <Button
+                      size="sm"
+                      className="h-8 bg-mamba-600 hover:bg-mamba-700"
+                      onClick={() => {
+                        onAddComment(item.id, commentText, replyingTo ?? undefined);
+                        setCommentText("");
+                        setReplyingTo(null);
+                      }}
+                    >
+                      Send
+                    </Button>
+                  </div>
+
+                  {rootComments.length ? (
+                    rootComments.map((comment) => (
+                      <div key={comment.id} className="space-y-1 rounded bg-muted/40 px-2 py-1.5">
+                        <p className="text-xs">{comment.body}</p>
+                        <p className="text-[10px] text-muted-foreground">
+                          {comment.user.firstName} {comment.user.lastName} • {formatRelativeTime(comment.createdAt)}
+                        </p>
+                        <div className="flex items-center gap-1">
+                          {["👍", "❤️", "🎉", "👀"].map((emoji) => {
+                            const active = (comment.reactions ?? []).some(
+                              (reaction) => reaction.userId === user.id && reaction.emoji === emoji
+                            );
+                            const count = (comment.reactions ?? []).filter((reaction) => reaction.emoji === emoji).length;
+                            return (
+                              <button
+                                key={`${comment.id}-${emoji}`}
+                                className={cn(
+                                  "rounded border px-1.5 py-0.5 text-[10px]",
+                                  active && "border-mamba-500 bg-mamba-50 text-mamba-700"
+                                )}
+                                onClick={() => onToggleCommentReaction(item.id, comment.id, emoji, active)}
+                              >
+                                {emoji} {count > 0 ? count : ""}
+                              </button>
+                            );
+                          })}
+                          <button
+                            className="ml-2 text-[10px] text-mamba-700"
+                            onClick={() => setReplyingTo(comment.id)}
+                          >
+                            Reply
+                          </button>
+                        </div>
+
+                        {(repliesByParent[comment.id] ?? []).length > 0 && (
+                          <div className="space-y-1 border-l pl-2">
+                            {(repliesByParent[comment.id] ?? []).map((reply) => (
+                              <div key={reply.id} className="rounded bg-background/80 px-2 py-1">
+                                <p className="text-xs">{reply.body}</p>
+                                <p className="text-[10px] text-muted-foreground">
+                                  {reply.user.firstName} {reply.user.lastName} • {formatRelativeTime(reply.createdAt)}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-xs text-muted-foreground">No comments yet</p>
+                  )}
+                </div>
+              )}
+
+              {detailTab === "activity" && (
+                <div className="space-y-2 rounded-md border p-2">
+                  {item.activities?.map((activity) => (
+                    <p key={activity.id} className="text-xs text-muted-foreground">
+                      {activity.user.firstName} {activity.user.lastName} • {activity.action.replace(/_/g, " ").toLowerCase()} • {formatRelativeTime(activity.createdAt)}
+                    </p>
+                  ))}
+                  {item.updates?.map((update) => (
+                    <p key={update.id} className="text-xs text-muted-foreground">
+                      {update.user.firstName} {update.user.lastName}: {update.body}
+                    </p>
+                  ))}
+                  {localActivities.map((entry) => (
+                    <p key={entry.id} className="text-xs text-muted-foreground">
+                      You • {entry.text} • {formatRelativeTime(entry.createdAt)}
+                    </p>
+                  ))}
+                  {!item.activities?.length && !item.updates?.length && !localActivities.length && (
+                    <p className="text-xs text-muted-foreground">No activity yet</p>
+                  )}
+                </div>
+              )}
+
+              {detailTab === "versions" && (
+                <div className="space-y-2 rounded-md border p-2">
+                  {itemVersions.length > 0 ? (
+                    itemVersions.map((version) => (
+                      <div key={version.id} className="rounded border bg-muted/20 p-2">
+                        <div className="flex items-center gap-2">
+                          <Avatar className="h-6 w-6">
+                            <AvatarFallback className="text-[10px]">
+                              {version.changedBy.firstName[0]}
+                              {version.changedBy.lastName[0]}
+                            </AvatarFallback>
+                          </Avatar>
+                          <p className="text-xs font-medium">
+                            {version.changedBy.firstName} {version.changedBy.lastName}
+                          </p>
+                          <span className="text-[10px] text-muted-foreground">
+                            {formatRelativeTime(version.createdAt)}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {version.field}: {version.oldValue ?? "∅"} {"->"} {version.newValue ?? "∅"}
+                        </p>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-xs text-muted-foreground">No version history yet</p>
+                  )}
+                </div>
+              )}
+
+              {detailTab === "docs" && (
+                <div className="space-y-2 rounded-md border p-2">
+                  <div className="flex gap-2">
+                    <select
+                      className="h-8 flex-1 rounded border px-2 text-xs"
+                      value={selectedDocId}
+                      onChange={(event) => setSelectedDocId(event.target.value)}
+                    >
+                      <option value="">Link a doc</option>
+                      {workspaceDocs.map((doc) => (
+                        <option key={doc.id} value={doc.id}>
+                          {(doc.icon ?? "📄")} {doc.title}
+                        </option>
+                      ))}
+                    </select>
+                    <Button size="sm" className="h-8" onClick={handleLinkDoc} disabled={!selectedDocId}>
+                      Link
+                    </Button>
+                  </div>
+                  {docEmbeds.length > 0 ? (
+                    docEmbeds.map((embed) => {
+                      const preview = extractDocText(embed.doc.content).replace(/\s+/g, " ").trim().slice(0, 180);
+                      return (
+                        <div key={embed.id} className="rounded border bg-muted/20 p-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-xs font-medium">
+                              {(embed.doc.icon ?? "📄")} {embed.doc.title}
+                            </p>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-6 text-[10px]"
+                              onClick={() => handleRemoveDocEmbed(embed.id)}
+                            >
+                              Remove
+                            </Button>
+                          </div>
+                          <p className="mt-1 text-[11px] text-muted-foreground">
+                            {preview || "No preview text"}
+                          </p>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <p className="text-xs text-muted-foreground">No docs linked to this item</p>
+                  )}
+                </div>
+              )}
             </section>
           </div>
 

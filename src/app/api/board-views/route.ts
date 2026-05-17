@@ -1,7 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getAuthUser } from "@/lib/session";
-import { createBoardViewSchema } from "@/lib/validations";
+import { z } from "zod";
+
+const legacyCreateSchema = z.object({
+  boardId: z.string().uuid(),
+  name: z.string().min(1).max(200),
+  filters: z.unknown().optional(),
+  isDefault: z.boolean().optional(),
+});
 
 export async function GET(req: NextRequest) {
   try {
@@ -11,7 +18,7 @@ export async function GET(req: NextRequest) {
     if (!boardId) return NextResponse.json({ error: "boardId required" }, { status: 400 });
 
     const views = await prisma.boardView.findMany({
-      where: { boardId, userId: user.id },
+      where: { boardId, createdById: user.id },
       orderBy: { createdAt: "desc" },
     });
     return NextResponse.json({ views });
@@ -26,15 +33,15 @@ export async function POST(req: NextRequest) {
     const user = await getAuthUser();
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     const body = await req.json();
-    const data = createBoardViewSchema.parse(body);
+    const data = legacyCreateSchema.parse(body);
 
     const view = await prisma.boardView.create({
       data: {
         boardId: data.boardId,
-        userId: user.id,
         name: data.name,
-        viewKind: data.viewKind,
-        config: data.config ? (JSON.parse(JSON.stringify(data.config)) as any) : undefined,
+        filters: data.filters ? (JSON.parse(JSON.stringify(data.filters)) as any) : {},
+        isDefault: Boolean(data.isDefault),
+        createdById: user.id,
       },
     });
 

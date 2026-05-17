@@ -44,16 +44,33 @@ export async function PATCH(
       if (itemData) {
         const formulaColumns = itemData.board.columns.filter((column) => column.columnType === "FORMULA");
         if (formulaColumns.length > 0) {
-          const contextByTitle: Record<string, unknown> = Object.fromEntries(
-            itemData.columnValues.map((entry) => [entry.column.title, entry.value])
-          );
+          const currentValueContext: Record<string, unknown> = {};
+          for (const entry of itemData.columnValues) {
+            currentValueContext[entry.column.id] = entry.value;
+            currentValueContext[entry.column.title] = entry.value;
+          }
+
+          const boardColumnValues = await prisma.columnValue.findMany({
+            where: { item: { boardId: itemData.boardId } },
+            include: { column: { select: { id: true, title: true } } },
+          });
+          const boardValuesByKey: Record<string, unknown[]> = {};
+          for (const entry of boardColumnValues) {
+            if (!boardValuesByKey[entry.column.id]) boardValuesByKey[entry.column.id] = [];
+            boardValuesByKey[entry.column.id].push(entry.value);
+            if (!boardValuesByKey[entry.column.title]) boardValuesByKey[entry.column.title] = [];
+            boardValuesByKey[entry.column.title].push(entry.value);
+          }
 
           for (const formulaColumn of formulaColumns) {
             const formula = (formulaColumn.config as { formula?: string } | null)?.formula;
             if (!formula) continue;
             let computedValue: unknown = null;
             try {
-              computedValue = evaluateFormulaExpression(formula, contextByTitle);
+              computedValue = evaluateFormulaExpression(formula, {
+                currentItemValues: currentValueContext,
+                boardColumnValues: boardValuesByKey,
+              });
             } catch {
               computedValue = null;
             }
@@ -73,7 +90,12 @@ export async function PATCH(
                 },
               });
             }
-            contextByTitle[formulaColumn.title] = computedValue;
+            currentValueContext[formulaColumn.id] = computedValue;
+            currentValueContext[formulaColumn.title] = computedValue;
+            if (!boardValuesByKey[formulaColumn.id]) boardValuesByKey[formulaColumn.id] = [];
+            boardValuesByKey[formulaColumn.id].push(computedValue);
+            if (!boardValuesByKey[formulaColumn.title]) boardValuesByKey[formulaColumn.title] = [];
+            boardValuesByKey[formulaColumn.title].push(computedValue);
           }
         }
 

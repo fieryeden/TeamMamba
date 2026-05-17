@@ -20,6 +20,18 @@ type Doc = {
 };
 
 type Workspace = { id: string; name: string };
+type BoardOption = { id: string; name: string; groups: Array<{ id: string; name: string }> };
+type BoardItemOption = { id: string; name: string; groupId: string };
+type DocEmbed = {
+  id: string;
+  boardId: string;
+  itemId: string | null;
+  embedType: string;
+  embedData: { groupId?: string; itemId?: string };
+  board: { id: string; name: string };
+  item: { id: string; name: string } | null;
+  createdAt: string;
+};
 
 const DOC_ICONS = ["📄", "📝", "📋", "📌", "💡", "🎯", "📊", "🗓️", "🔧", "🎨", "🚀", "📦"];
 
@@ -38,6 +50,14 @@ export function DocsClient({ workspaces }: DocsClientProps) {
   const [newDocIcon, setNewDocIcon] = useState("📄");
   const [newDocWorkspace, setNewDocWorkspace] = useState(workspaces[0]?.id ?? "");
   const [saving, setSaving] = useState(false);
+  const [boards, setBoards] = useState<BoardOption[]>([]);
+  const [boardItems, setBoardItems] = useState<BoardItemOption[]>([]);
+  const [embeds, setEmbeds] = useState<DocEmbed[]>([]);
+  const [showEmbedDialog, setShowEmbedDialog] = useState(false);
+  const [embedBoardId, setEmbedBoardId] = useState("");
+  const [embedGroupId, setEmbedGroupId] = useState("");
+  const [embedItemId, setEmbedItemId] = useState("");
+  const [embedPreviewById, setEmbedPreviewById] = useState<Record<string, { title: string; rows: string[] }>>({});
 
   const loadDocs = useCallback(async () => {
     setLoading(true);
@@ -70,6 +90,49 @@ export function DocsClient({ workspaces }: DocsClientProps) {
     }
   };
 
+  const loadEmbeds = useCallback(async (docId: string) => {
+    try {
+      const res = await fetch(`/api/docs/${docId}/embeds`);
+      if (!res.ok) return;
+      const json = await res.json();
+      setEmbeds(json.embeds ?? []);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!activeDoc) {
+      setBoards([]);
+      setBoardItems([]);
+      setEmbeds([]);
+      return;
+    }
+    loadEmbeds(activeDoc.id);
+    fetch(`/api/boards?workspaceId=${activeDoc.workspace.id}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => setBoards(data?.boards ?? []))
+      .catch(() => {});
+  }, [activeDoc, loadEmbeds]);
+
+  useEffect(() => {
+    if (!embedBoardId) {
+      setBoardItems([]);
+      return;
+    }
+    fetch(`/api/boards/${embedBoardId}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        const board = data?.board as { groups?: Array<{ id: string; items?: Array<{ id: string; name: string }> }> } | undefined;
+        const items =
+          board?.groups?.flatMap((group) =>
+            (group.items ?? []).map((item) => ({ id: item.id, name: item.name, groupId: group.id }))
+          ) ?? [];
+        setBoardItems(items);
+      })
+      .catch(() => {});
+  }, [embedBoardId]);
+
   const extractText = (node: Record<string, unknown>): string => {
     if (node.text) return node.text as string;
     if (Array.isArray(node.content)) {
@@ -100,6 +163,44 @@ export function DocsClient({ workspaces }: DocsClientProps) {
       console.error("Save error:", err);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const createEmbed = async () => {
+    if (!activeDoc || !embedBoardId) return;
+    try {
+      const res = await fetch(`/api/docs/${activeDoc.id}/embeds`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          boardId: embedBoardId,
+          itemId: embedItemId || null,
+          embedType: "BOARD_VIEW",
+          embedData: {
+            ...(embedGroupId ? { groupId: embedGroupId } : {}),
+            ...(embedItemId ? { itemId: embedItemId } : {}),
+          },
+        }),
+      });
+      if (!res.ok) return;
+      setShowEmbedDialog(false);
+      setEmbedBoardId("");
+      setEmbedGroupId("");
+      setEmbedItemId("");
+      loadEmbeds(activeDoc.id);
+    } catch {
+      // ignore
+    }
+  };
+
+  const removeEmbed = async (embedId: string) => {
+    if (!activeDoc) return;
+    try {
+      const res = await fetch(`/api/docs/${activeDoc.id}/embeds?embedId=${embedId}`, { method: "DELETE" });
+      if (!res.ok) return;
+      setEmbeds((prev) => prev.filter((entry) => entry.id !== embedId));
+    } catch {
+      // ignore
     }
   };
 
@@ -235,6 +336,9 @@ export function DocsClient({ workspaces }: DocsClientProps) {
                     {activeDoc.workspace.name} · Updated {new Date(activeDoc.updatedAt).toLocaleDateString()}
                   </p>
                 </div>
+                <Button size="sm" variant="outline" onClick={() => setShowEmbedDialog(true)}>
+                  Embed Board
+                </Button>
                 <Badge variant="secondary">{saving ? "Saving..." : "Auto-saved"}</Badge>
               </div>
             </CardHeader>
@@ -246,6 +350,29 @@ export function DocsClient({ workspaces }: DocsClientProps) {
                 onBlur={saveDoc}
                 placeholder="Start writing..."
               />
+              {embeds.length > 0 && (
+                <div className="mt-6 space-y-3">
+                  <h3 className="text-sm font-semibold">Embedded Boards</h3>
+                  {embeds.map((embed) => (
+                    <div key={embed.id} className="rounded-lg border bg-muted/20 p-3">
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <p className="text-sm font-medium">
+                          {embed.board.name}
+                          {embed.item ? ` · ${embed.item.name}` : ""}
+                        </p>
+                        <Button size="sm" variant="ghost" onClick={() => removeEmbed(embed.id)}>
+                          Remove
+                        </Button>
+                      </div>
+                      <div className="rounded-md border bg-background px-3 py-2 text-xs text-muted-foreground">
+                        Preview: board iframe-like snapshot
+                        {embed.embedData?.groupId ? ` · Group ${embed.embedData.groupId}` : ""}
+                        {embed.embedData?.itemId ? ` · Item ${embed.embedData.itemId}` : ""}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
         ) : (
@@ -258,6 +385,70 @@ export function DocsClient({ workspaces }: DocsClientProps) {
           </div>
         )}
       </div>
+
+      <Dialog open={showEmbedDialog} onOpenChange={setShowEmbedDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Embed Board View</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <label className="text-sm font-medium">Board</label>
+              <select
+                className="mt-1 w-full rounded-lg border bg-transparent px-3 py-2 text-sm"
+                value={embedBoardId}
+                onChange={(e) => {
+                  setEmbedBoardId(e.target.value);
+                  setEmbedGroupId("");
+                  setEmbedItemId("");
+                }}
+              >
+                <option value="">Select board</option>
+                {boards.map((board) => (
+                  <option key={board.id} value={board.id}>{board.name}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-sm font-medium">Group filter (optional)</label>
+              <select
+                className="mt-1 w-full rounded-lg border bg-transparent px-3 py-2 text-sm"
+                value={embedGroupId}
+                onChange={(e) => {
+                  setEmbedGroupId(e.target.value);
+                  setEmbedItemId("");
+                }}
+                disabled={!embedBoardId}
+              >
+                <option value="">All groups</option>
+                {(boards.find((board) => board.id === embedBoardId)?.groups ?? []).map((group) => (
+                  <option key={group.id} value={group.id}>{group.name}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-sm font-medium">Item filter (optional)</label>
+              <select
+                className="mt-1 w-full rounded-lg border bg-transparent px-3 py-2 text-sm"
+                value={embedItemId}
+                onChange={(e) => setEmbedItemId(e.target.value)}
+                disabled={!embedBoardId}
+              >
+                <option value="">All items</option>
+                {boardItems
+                  .filter((item) => !embedGroupId || item.groupId === embedGroupId)
+                  .map((item) => (
+                    <option key={item.id} value={item.id}>{item.name}</option>
+                  ))}
+              </select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowEmbedDialog(false)}>Cancel</Button>
+            <Button onClick={createEmbed} disabled={!embedBoardId}>Embed</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* New Doc Dialog */}
       <Dialog open={showNewDoc} onOpenChange={setShowNewDoc}>
