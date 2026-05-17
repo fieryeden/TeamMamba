@@ -2,13 +2,16 @@ import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/mailer";
 
 type AutomationEvent =
-  | "STATUS_CHANGED"
-  | "DATE_ARRIVES"
   | "ITEM_CREATED"
+  | "ITEM_UPDATED"
+  | "STATUS_CHANGED"
+  | "DATE_ARRIVED"
+  | "DATE_ARRIVES"
+  | "COLUMN_CHANGED"
+  | "COLUMN_VALUE_CHANGED"
   | "ITEM_MOVED_TO_GROUP"
   | "PRIORITY_CHANGED"
   | "ASSIGNEE_CHANGED"
-  | "COLUMN_VALUE_CHANGED"
   | "RECURRING_SCHEDULE";
 
 type ItemShape = {
@@ -19,6 +22,31 @@ type ItemShape = {
   columnValues?: Array<{ columnId: string; value: unknown }>;
   assignees?: Array<{ userId: string }>;
   [key: string]: unknown;
+};
+
+type RuleCondition = {
+  field: string;
+  operator:
+    | "field_equals"
+    | "field_not_equals"
+    | "field_contains"
+    | "field_is_empty"
+    | "field_greater_than"
+    | "field_less_than";
+  value?: unknown;
+};
+
+type RuleAction = {
+  action:
+    | "change_status"
+    | "move_item_to_group"
+    | "assign_user"
+    | "send_notification"
+    | "send_email"
+    | "create_item"
+    | "update_column"
+    | "add_tag";
+  config?: Record<string, unknown>;
 };
 
 function getByPath(source: unknown, path: string): unknown {
@@ -34,63 +62,104 @@ function getByPath(source: unknown, path: string): unknown {
 
 function valuesEqual(actual: unknown, expected: unknown): boolean {
   if (Array.isArray(actual)) {
-    if (Array.isArray(expected)) {
-      return expected.every((value) => actual.includes(value));
-    }
+    if (Array.isArray(expected)) return expected.every((value) => actual.includes(value));
     return actual.includes(expected);
   }
-  if (typeof actual === "number" && typeof expected === "string" && expected.trim() !== "") {
+  if (typeof actual === "number" && typeof expected === "string") {
     const maybeNum = Number(expected);
     if (!Number.isNaN(maybeNum)) return actual === maybeNum;
   }
-  if (typeof expected === "number" && typeof actual === "string" && actual.trim() !== "") {
+  if (typeof expected === "number" && typeof actual === "string") {
     const maybeNum = Number(actual);
     if (!Number.isNaN(maybeNum)) return expected === maybeNum;
   }
   return JSON.stringify(actual) === JSON.stringify(expected);
 }
 
-function getConditionActualValue(item: ItemShape, key: string): unknown {
+function getConditionValue(item: ItemShape, key: string): unknown {
   if (key.startsWith("column.")) {
     const columnId = key.slice("column.".length);
     return item.columnValues?.find((entry) => entry.columnId === columnId)?.value;
   }
-  if (key === "itemId") return item.id;
   if (key === "assigneeIds") return item.assignees?.map((entry) => entry.userId) ?? [];
   if (key.includes(".")) return getByPath(item, key);
   return item[key];
 }
 
-function matchesConditions(item: ItemShape, conditions: Record<string, unknown> | null | undefined): boolean {
-  if (!conditions) return true;
+function evaluateRuleCondition(item: ItemShape, condition: RuleCondition): boolean {
+  const actual = getConditionValue(item, condition.field);
+  const expected = condition.value;
+  switch (condition.operator) {
+    case "field_equals":
+      return valuesEqual(actual, expected);
+    case "field_not_equals":
+      return !valuesEqual(actual, expected);
+    case "field_contains":
+      return String(actual ?? "").toLowerCase().includes(String(expected ?? "").toLowerCase());
+    case "field_is_empty":
+      return actual == null || String(actual).trim() === "" || (Array.isArray(actual) && actual.length === 0);
+    case "field_greater_than":
+      return Number(actual) > Number(expected);
+    case "field_less_than":
+      return Number(actual) < Number(expected);
+    default:
+      return false;
+  }
+}
 
-  return Object.entries(conditions).every(([key, expected]) => {
-    const actual = getConditionActualValue(item, key);
-
-    if (expected && typeof expected === "object" && !Array.isArray(expected)) {
-      const entry = expected as Record<string, unknown>;
-      const operator = entry.operator;
-      const value = entry.value;
-      if (operator === "contains") {
-        return String(actual ?? "").toLowerCase().includes(String(value ?? "").toLowerCase());
-      }
-      if (operator === "not_contains") {
-        return !String(actual ?? "").toLowerCase().includes(String(value ?? "").toLowerCase());
-      }
-      if (operator === "is_not") {
-        return !valuesEqual(actual, value);
-      }
-      if (operator === "gt") {
-        return Number(actual) > Number(value);
-      }
-      if (operator === "lt") {
-        return Number(actual) < Number(value);
-      }
-      return valuesEqual(actual, value);
+function toRuleConditions(raw: unknown): { logic: "AND" | "OR"; conditions: RuleCondition[] } {
+  if (raw && typeof raw === "object") {
+    const obj = raw as Record<string, unknown>;
+    if (Array.isArray(obj.conditions)) {
+      const parsed: RuleCondition[] = obj.conditions
+        .map((entry) => {
+          if (!entry || typeof entry !== "object") return null;
+          const cond = entry as Record<string, unknown>;
+          if (typeof cond.field !== "string" || typeof cond.operator !== "string") return null;
+          return {
+            field: cond.field,
+            operator: cond.operator as RuleCondition["operator"],
+            value: cond.value,
+          };
+        })
+        .filter((entry): entry is NonNullable<typeof entry> => entry != null) as RuleCondition[];
+      return {
+        logic: obj.logic === "OR" ? "OR" : "AND",
+        conditions: parsed,
+      };
     }
 
-    return valuesEqual(actual, expected);
-  });
+    // Legacy key/value conditions support
+    const legacyConditions: RuleCondition[] = Object.entries(obj).map(([key, value]) => {
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        const entry = value as Record<string, unknown>;
+        const op = typeof entry.operator === "string" ? entry.operator : "field_equals";
+        const normalizedOperator: RuleCondition["operator"] =
+          op === "contains" || op === "field_contains"
+            ? "field_contains"
+            : op === "not_contains" || op === "field_not_equals" || op === "is_not"
+              ? "field_not_equals"
+              : op === "gt" || op === "field_greater_than"
+                ? "field_greater_than"
+                : op === "lt" || op === "field_less_than"
+                  ? "field_less_than"
+                  : op === "field_is_empty"
+                    ? "field_is_empty"
+                    : "field_equals";
+        return { field: key, operator: normalizedOperator, value: entry.value };
+      }
+      return { field: key, operator: "field_equals", value };
+    });
+    return { logic: "AND", conditions: legacyConditions };
+  }
+  return { logic: "AND", conditions: [] };
+}
+
+function matchesConditions(item: ItemShape, rawConditions: unknown): boolean {
+  const { logic, conditions } = toRuleConditions(rawConditions);
+  if (!conditions.length) return true;
+  if (logic === "OR") return conditions.some((condition) => evaluateRuleCondition(item, condition));
+  return conditions.every((condition) => evaluateRuleCondition(item, condition));
 }
 
 async function upsertColumnValue(itemId: string, columnId: string, value: unknown) {
@@ -98,160 +167,100 @@ async function upsertColumnValue(itemId: string, columnId: string, value: unknow
     where: { itemId, columnId },
     select: { id: true },
   });
-
-  const serialized = JSON.parse(JSON.stringify(value)) as any;
-
+  const serialized = JSON.parse(JSON.stringify(value ?? null)) as any;
   if (existing) {
-    await prisma.columnValue.update({
-      where: { id: existing.id },
-      data: { value: serialized },
-    });
+    await prisma.columnValue.update({ where: { id: existing.id }, data: { value: serialized } });
     return;
   }
-
-  await prisma.columnValue.create({
-    data: { itemId, columnId, value: serialized },
-  });
+  await prisma.columnValue.create({ data: { itemId, columnId, value: serialized } });
 }
 
-function shiftDateValue(rawValue: unknown, days: number): unknown {
-  if (typeof rawValue === "string") {
-    const date = new Date(rawValue);
-    if (Number.isNaN(date.getTime())) return rawValue;
-    date.setDate(date.getDate() + days);
-    return date.toISOString().slice(0, 10);
-  }
-
-  if (rawValue && typeof rawValue === "object") {
-    const value = rawValue as Record<string, unknown>;
-    const current = typeof value.date === "string" ? value.date : typeof value.start === "string" ? value.start : null;
-    if (!current) return rawValue;
-    const date = new Date(current);
-    if (Number.isNaN(date.getTime())) return rawValue;
-    date.setDate(date.getDate() + days);
-    const next = date.toISOString().slice(0, 10);
-    if (value.date) return { ...value, date: next };
-    if (value.start) return { ...value, start: next };
-  }
-
-  return rawValue;
+function normalizeActionName(action: string): RuleAction["action"] | null {
+  const value = action.toUpperCase();
+  if (value === "CHANGE_STATUS") return "change_status";
+  if (value === "MOVE_ITEM_TO_GROUP") return "move_item_to_group";
+  if (value === "ASSIGN_USER") return "assign_user";
+  if (value === "NOTIFY_ASSIGNEE" || value === "NOTIFY_USER" || value === "SEND_NOTIFICATION") return "send_notification";
+  if (value === "SEND_EMAIL") return "send_email";
+  if (value === "CREATE_ITEM") return "create_item";
+  if (value === "SET_COLUMN_VALUE" || value === "UPDATE_COLUMN") return "update_column";
+  if (value === "ADD_TAG") return "add_tag";
+  return null;
 }
 
-async function executeAction(automation: {
-  id: string;
-  name: string;
+function getActionsForAutomation(automation: {
   action: string;
   actionConfig: unknown;
-}, item: {
-  id: string;
-  boardId: string;
-  groupId: string;
-  name: string;
-  assignees: Array<{ userId: string }>;
-  columnValues: Array<{ id: string; columnId: string; value: unknown }>;
-}) {
+}): RuleAction[] {
   const config = (automation.actionConfig as Record<string, unknown> | null) ?? {};
+  if (Array.isArray(config.actions)) {
+const steps: RuleAction[] = config.actions
+ .map((entry): RuleAction | null => {
+ if (!entry || typeof entry !== "object") return null;
+ const raw = entry as Record<string, unknown>;
+ const normalized = typeof raw.action === "string" ? normalizeActionName(raw.action) : null;
+ if (!normalized) return null;
+ return {
+ action: normalized,
+ config: (raw.config && typeof raw.config === "object" ? raw.config : raw) as Record<string, unknown>,
+ };
+ })
+ .filter((entry): entry is RuleAction => entry !== null);
+    if (steps.length) return steps;
+  }
 
-  switch (automation.action) {
-    case "CHANGE_STATUS": {
-      const targetColumnId = typeof config.targetColumnId === "string" ? config.targetColumnId : typeof config.columnId === "string" ? config.columnId : null;
-      if (!targetColumnId) return;
+  const normalizedAction = normalizeActionName(automation.action);
+  if (!normalizedAction) return [];
+  return [{ action: normalizedAction, config }];
+}
+
+async function executeRuleAction(
+  automationName: string,
+  action: RuleAction,
+  item: {
+    id: string;
+    boardId: string;
+    groupId: string;
+    name: string;
+    assignees: Array<{ userId: string }>;
+    columnValues: Array<{ id: string; columnId: string; value: unknown }>;
+  }
+) {
+  const config = action.config ?? {};
+
+  switch (action.action) {
+    case "change_status": {
+      const targetColumnId = typeof config.targetColumnId === "string"
+        ? config.targetColumnId
+        : typeof config.columnId === "string"
+          ? config.columnId
+          : null;
       const targetValue = config.targetValue ?? config.value ?? config.status;
-      if (targetValue === undefined) return;
+      if (!targetColumnId || targetValue === undefined) return;
       await upsertColumnValue(item.id, targetColumnId, targetValue);
       return;
     }
 
-    case "MOVE_ITEM_TO_GROUP": {
-      const targetGroupId = typeof config.targetGroupId === "string" ? config.targetGroupId : typeof config.groupId === "string" ? config.groupId : null;
+    case "move_item_to_group": {
+      const targetGroupId = typeof config.targetGroupId === "string"
+        ? config.targetGroupId
+        : typeof config.groupId === "string"
+          ? config.groupId
+          : null;
       if (!targetGroupId || targetGroupId === item.groupId) return;
-
       const last = await prisma.item.findFirst({
         where: { groupId: targetGroupId },
         orderBy: { position: "desc" },
         select: { position: true },
       });
-
       await prisma.item.update({
         where: { id: item.id },
-        data: {
-          groupId: targetGroupId,
-          position: (last?.position ?? -1) + 1,
-        },
+        data: { groupId: targetGroupId, position: (last?.position ?? -1) + 1 },
       });
       return;
     }
 
-    case "NOTIFY_ASSIGNEE": {
-      if (!item.assignees.length) return;
-      await prisma.notification.createMany({
-        data: item.assignees.map((assignee) => ({
-          userId: assignee.userId,
-          type: "AUTOMATION",
-          title: typeof config.title === "string" ? config.title : `Automation: ${automation.name}`,
-          body: typeof config.body === "string" ? config.body : `Item "${item.name}" was updated by an automation.`,
-          actionUrl: `/board/${item.boardId}`,
-        })),
-      });
-      return;
-    }
-
-    case "NOTIFY_USER": {
-      const userId = typeof config.userId === "string" ? config.userId : null;
-      if (!userId) return;
-      await prisma.notification.create({
-        data: {
-          userId,
-          type: "AUTOMATION",
-          title: typeof config.title === "string" ? config.title : `Automation: ${automation.name}`,
-          body: typeof config.body === "string" ? config.body : `Item "${item.name}" triggered an automation.`,
-          actionUrl: typeof config.actionUrl === "string" ? config.actionUrl : `/board/${item.boardId}`,
-        },
-      });
-      return;
-    }
-
-    case "SET_COLUMN_VALUE": {
-      const columnId = typeof config.columnId === "string" ? config.columnId : null;
-      if (!columnId) return;
-      if (!Object.prototype.hasOwnProperty.call(config, "value")) return;
-      await upsertColumnValue(item.id, columnId, config.value);
-      return;
-    }
-
-    case "CREATE_ITEM": {
-      const groupId = typeof config.groupId === "string" ? config.groupId : item.groupId;
-      const maxPos = await prisma.item.findFirst({
-        where: { groupId },
-        orderBy: { position: "desc" },
-        select: { position: true },
-      });
-      const name = typeof config.itemName === "string" && config.itemName.trim().length > 0
-        ? config.itemName.trim()
-        : `${item.name} follow-up`;
-      await prisma.item.create({
-        data: {
-          boardId: item.boardId,
-          groupId,
-          name,
-          position: (maxPos?.position ?? -1) + 1,
-        },
-      });
-      return;
-    }
-
-    case "SEND_EMAIL": {
-      const to = typeof config.to === "string" ? config.to : null;
-      if (!to) return;
-      await sendEmail({
-        to,
-        subject: typeof config.subject === "string" ? config.subject : `Automation: ${automation.name}`,
-        text: typeof config.body === "string" ? config.body : `Item "${item.name}" triggered an automation.`,
-      });
-      return;
-    }
-
-    case "ASSIGN_USER": {
+    case "assign_user": {
       const userIds = Array.isArray(config.userIds)
         ? config.userIds.filter((value): value is string => typeof value === "string")
         : typeof config.userId === "string"
@@ -265,19 +274,95 @@ async function executeAction(automation: {
       return;
     }
 
-    case "SHIFT_DATE": {
-      const columnId = typeof config.columnId === "string" ? config.columnId : null;
-      if (!columnId) return;
-      const days = Number(config.days ?? 0);
-      if (!Number.isFinite(days) || days === 0) return;
-      const existingValue = item.columnValues.find((entry) => entry.columnId === columnId)?.value;
-      if (existingValue == null) return;
-      await upsertColumnValue(item.id, columnId, shiftDateValue(existingValue, days));
+    case "send_notification": {
+      const configuredUserIds = Array.isArray(config.userIds)
+        ? config.userIds.filter((value): value is string => typeof value === "string")
+        : typeof config.userId === "string"
+          ? [config.userId]
+          : [];
+      const useAssignees = config.toAssignees === true || (!configuredUserIds.length && item.assignees.length > 0);
+      const recipients = useAssignees ? item.assignees.map((entry) => entry.userId) : configuredUserIds;
+      if (!recipients.length) return;
+      await prisma.notification.createMany({
+        data: recipients.map((userId) => ({
+          userId,
+          type: "AUTOMATION",
+          title: typeof config.title === "string" ? config.title : `Automation: ${automationName}`,
+          body: typeof config.body === "string" ? config.body : `Item "${item.name}" triggered an automation.`,
+          actionUrl: typeof config.actionUrl === "string" ? config.actionUrl : `/board/${item.boardId}`,
+        })),
+      });
       return;
     }
 
-    default:
+    case "send_email": {
+      const to = typeof config.to === "string" ? config.to : null;
+      if (!to) return;
+      await sendEmail({
+        to,
+        subject: typeof config.subject === "string" ? config.subject : `Automation: ${automationName}`,
+        text: typeof config.body === "string" ? config.body : `Item "${item.name}" triggered an automation.`,
+      });
       return;
+    }
+
+    case "create_item": {
+      const groupId = typeof config.groupId === "string" ? config.groupId : item.groupId;
+      const maxPos = await prisma.item.findFirst({
+        where: { groupId },
+        orderBy: { position: "desc" },
+        select: { position: true },
+      });
+      const name = typeof config.itemName === "string" && config.itemName.trim()
+        ? config.itemName.trim()
+        : `${item.name} follow-up`;
+      await prisma.item.create({
+        data: {
+          boardId: item.boardId,
+          groupId,
+          name,
+          position: (maxPos?.position ?? -1) + 1,
+        },
+      });
+      return;
+    }
+
+    case "update_column": {
+      const columnId = typeof config.columnId === "string"
+        ? config.columnId
+        : typeof config.targetColumnId === "string"
+          ? config.targetColumnId
+          : null;
+      if (!columnId) return;
+      const value = Object.prototype.hasOwnProperty.call(config, "value") ? config.value : config.targetValue;
+      if (value === undefined) return;
+      await upsertColumnValue(item.id, columnId, value);
+      return;
+    }
+
+    case "add_tag": {
+      const columnId = typeof config.columnId === "string" ? config.columnId : null;
+      const tag = typeof config.tag === "string" ? config.tag : typeof config.value === "string" ? config.value : null;
+      if (!columnId || !tag) return;
+      const existing = item.columnValues.find((entry) => entry.columnId === columnId)?.value;
+      const current = Array.isArray(existing) ? existing.filter((entry): entry is string => typeof entry === "string") : [];
+      const next = Array.from(new Set([...current, tag]));
+      await upsertColumnValue(item.id, columnId, next);
+      return;
+    }
+  }
+}
+
+function triggerAliases(event: AutomationEvent): string[] {
+  switch (event) {
+    case "DATE_ARRIVED":
+      return ["DATE_ARRIVED", "DATE_ARRIVES"];
+    case "COLUMN_CHANGED":
+      return ["COLUMN_CHANGED", "COLUMN_VALUE_CHANGED"];
+    case "COLUMN_VALUE_CHANGED":
+      return ["COLUMN_VALUE_CHANGED", "COLUMN_CHANGED"];
+    default:
+      return [event];
   }
 }
 
@@ -288,11 +373,10 @@ export async function processAutomation(boardId: string, event: AutomationEvent,
     where: {
       boardId,
       isEnabled: true,
-      trigger: event,
+      trigger: { in: triggerAliases(event) as any },
     },
     orderBy: { createdAt: "asc" },
   });
-
   if (!automations.length) return;
 
   const dbItem = await prisma.item.findUnique({
@@ -302,7 +386,6 @@ export async function processAutomation(boardId: string, event: AutomationEvent,
       columnValues: { select: { id: true, columnId: true, value: true } },
     },
   });
-
   if (!dbItem) return;
 
   const contextItem: ItemShape = {
@@ -317,17 +400,19 @@ export async function processAutomation(boardId: string, event: AutomationEvent,
   };
 
   for (const automation of automations) {
-    const conditions = (automation.conditions as Record<string, unknown> | null) ?? null;
-    if (!matchesConditions(contextItem, conditions)) continue;
+    if (!matchesConditions(contextItem, automation.conditions)) continue;
 
-    await executeAction(automation, {
-      id: dbItem.id,
-      boardId: dbItem.boardId,
-      groupId: dbItem.groupId,
-      name: dbItem.name,
-      assignees: dbItem.assignees,
-      columnValues: dbItem.columnValues,
-    });
+    const actions = getActionsForAutomation(automation);
+    for (const action of actions) {
+      await executeRuleAction(automation.name, action, {
+        id: dbItem.id,
+        boardId: dbItem.boardId,
+        groupId: dbItem.groupId,
+        name: dbItem.name,
+        assignees: dbItem.assignees,
+        columnValues: dbItem.columnValues,
+      });
+    }
 
     await prisma.automation.update({
       where: { id: automation.id },
@@ -345,8 +430,10 @@ export async function processAutomation(boardId: string, event: AutomationEvent,
           automationName: automation.name,
           trigger: event,
           action: automation.action,
+          actionsExecuted: actions.map((entry) => entry.action),
         } as any,
       },
     });
   }
 }
+

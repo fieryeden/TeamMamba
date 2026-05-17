@@ -79,6 +79,16 @@ export async function PATCH(
       });
     }
 
+    await processAutomation(item.boardId, "ITEM_UPDATED", {
+      id: item.id,
+      boardId: item.boardId,
+      groupId: item.groupId,
+      name: item.name,
+      previousGroupId: existingItem.groupId,
+      triggeredByUserId: user.id,
+      changes: Object.keys(body),
+    });
+
     // Fire webhooks + audit log
     fireWebhooks({
       event: "ITEM_UPDATED",

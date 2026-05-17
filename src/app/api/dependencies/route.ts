@@ -8,13 +8,30 @@ export async function GET(req: NextRequest) {
   try {
     const user = await getAuthUser();
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    const itemId = new URL(req.url).searchParams.get("itemId");
-    if (!itemId) return NextResponse.json({ error: "itemId required" }, { status: 400 });
+    const searchParams = new URL(req.url).searchParams;
+    const itemId = searchParams.get("itemId");
+    const boardId = searchParams.get("boardId");
+    if (!itemId && !boardId) {
+      return NextResponse.json({ error: "itemId or boardId required" }, { status: 400 });
+    }
+
+    if (boardId) {
+      const membership = await prisma.boardMember.findFirst({
+        where: { boardId, userId: user.id },
+        select: { id: true },
+      });
+      if (!membership) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
 
     const dependencies = await prisma.dependency.findMany({
-      where: {
-        OR: [{ fromItemId: itemId }, { toItemId: itemId }],
-      },
+      where: boardId
+        ? {
+            fromItem: { boardId },
+            toItem: { boardId },
+          }
+        : {
+            OR: [{ fromItemId: itemId! }, { toItemId: itemId! }],
+          },
       include: {
         fromItem: { select: { id: true, name: true } },
         toItem: { select: { id: true, name: true } },

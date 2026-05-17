@@ -6,6 +6,7 @@ import { evaluateFormulaExpression } from "@/lib/formulas";
 import { sendEmail } from "@/lib/mailer";
 import { broadcastToBoard } from "@/lib/socket";
 import { processAutomation } from "@/lib/automation-engine";
+import { recomputeDerivedColumnsForTargetItem } from "@/lib/connect-columns";
 
 export async function PATCH(
   req: NextRequest,
@@ -157,6 +158,28 @@ export async function PATCH(
           });
         }
 
+        await processAutomation(itemData.boardId, "ITEM_UPDATED", {
+          id: itemData.id,
+          boardId: itemData.boardId,
+          groupId: itemData.groupId,
+          name: itemData.name,
+          triggeredColumnId: columnValue.columnId,
+          triggeredColumnType: columnValue.column.columnType,
+          triggeredByUserId: user.id,
+          newValue: value,
+        });
+
+        await processAutomation(itemData.boardId, "COLUMN_CHANGED", {
+          id: itemData.id,
+          boardId: itemData.boardId,
+          groupId: itemData.groupId,
+          name: itemData.name,
+          triggeredColumnId: columnValue.columnId,
+          triggeredColumnType: columnValue.column.columnType,
+          triggeredByUserId: user.id,
+          newValue: value,
+        });
+
         if (columnValue.column.columnType === "PEOPLE") {
           const userIds = Array.isArray(value) ? value.filter((entry) => typeof entry === "string") : [];
           if (userIds.length > 0) {
@@ -196,6 +219,8 @@ export async function PATCH(
         }
 
       broadcastToBoard(itemData.boardId, "column:updated", { boardId: itemData.boardId, columnValue });
+
+      await recomputeDerivedColumnsForTargetItem(itemData.id);
       }
     }
 

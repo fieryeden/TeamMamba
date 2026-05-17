@@ -36,7 +36,7 @@ export const createBoardSchema = z.object({
   name: z.string().min(1).max(200),
   description: z.string().max(1000).optional(),
   icon: z.string().optional(),
-  boardKind: z.enum(["KANBAN", "TABLE", "TIMELINE", "CALENDAR", "FORM"]).default("KANBAN"),
+  boardKind: z.enum(["KANBAN", "TABLE", "TIMELINE", "CALENDAR", "GANTT", "FORM"]).default("KANBAN"),
   templateKey: z
     .enum(["PROJECT_TRACKER", "SPRINT_BOARD", "BUG_TRACKER", "CRM_PIPELINE", "CONTENT_CALENDAR"])
     .optional(),
@@ -46,7 +46,7 @@ export const updateBoardSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   description: z.string().max(1000).optional(),
   icon: z.string().optional(),
-  boardKind: z.enum(["KANBAN", "TABLE", "TIMELINE", "CALENDAR", "FORM"]).optional(),
+  boardKind: z.enum(["KANBAN", "TABLE", "TIMELINE", "CALENDAR", "GANTT", "FORM"]).optional(),
   color: z.string().optional(),
 });
 
@@ -86,6 +86,7 @@ export const createColumnSchema = z.object({
     "TEXT", "LONG_TEXT", "NUMBER", "STATUS", "DATE", "PEOPLE",
     "TAGS", "CHECKBOX", "TIMELINE", "LINK", "FILE", "FORMULA",
     "PROGRESS", "RATING", "EMAIL", "PHONE", "AUTO_NUMBER",
+    "CONNECT", "MIRROR", "ROLLUP",
   ]),
   config: z.record(z.unknown()).optional(),
 });
@@ -110,12 +111,14 @@ export const createAutomationSchema = z.object({
     "STATUS_CHANGED", "DATE_ARRIVES", "ITEM_CREATED",
     "ITEM_MOVED_TO_GROUP", "PRIORITY_CHANGED", "ASSIGNEE_CHANGED",
     "COLUMN_VALUE_CHANGED", "RECURRING_SCHEDULE",
+    "DATE_ARRIVED", "ITEM_UPDATED", "COLUMN_CHANGED",
   ]),
   conditions: z.record(z.unknown()).optional(),
   action: z.enum([
     "CHANGE_STATUS", "MOVE_ITEM_TO_GROUP", "NOTIFY_ASSIGNEE",
     "NOTIFY_USER", "SET_COLUMN_VALUE", "CREATE_ITEM",
     "SEND_EMAIL", "ASSIGN_USER", "SHIFT_DATE",
+    "SEND_NOTIFICATION", "UPDATE_COLUMN", "ADD_TAG",
   ]),
   actionConfig: z.record(z.unknown()).optional(),
 });
@@ -178,7 +181,7 @@ export const commentReactionSchema = z.object({
 export const createBoardViewSchema = z.object({
   boardId: z.string().uuid(),
   name: z.string().min(1).max(200),
-  viewKind: z.enum(["KANBAN", "TABLE", "TIMELINE", "CALENDAR", "FORM"]).default("TABLE"),
+  viewKind: z.enum(["KANBAN", "TABLE", "TIMELINE", "CALENDAR", "GANTT", "FORM"]).default("TABLE"),
   config: z.record(z.unknown()).optional(),
 });
 

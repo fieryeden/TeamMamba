@@ -157,8 +157,8 @@ export function WorkspaceClient({ workspace }: WorkspaceClientProps) {
             </div>
             <div className="space-y-1">
               <label className="text-sm font-medium">Board Type</label>
-              <div className="grid grid-cols-3 gap-2">
-                {["KANBAN", "TABLE", "TIMELINE"].map((kind) => (
+              <div className="grid grid-cols-4 gap-2">
+                {["KANBAN", "TABLE", "TIMELINE", "GANTT"].map((kind) => (
                   <button
                     key={kind}
                     className={`rounded-lg border p-3 text-xs font-medium transition-colors ${
@@ -168,7 +168,7 @@ export function WorkspaceClient({ workspace }: WorkspaceClientProps) {
                     }`}
                     onClick={() => setNewBoardKind(kind)}
                   >
-                    {kind === "KANBAN" && "📋"}{kind === "TABLE" && "📊"}{kind === "TIMELINE" && "📅"}
+                    {kind === "KANBAN" && "📋"}{kind === "TABLE" && "📊"}{kind === "TIMELINE" && "📅"}{kind === "GANTT" && "🗂️"}
                     <br />{kind.charAt(0) + kind.slice(1).toLowerCase()}
                   </button>
                 ))}

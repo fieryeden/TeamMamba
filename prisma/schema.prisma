@@ -50,6 +50,7 @@ model User {
   createdBoardViews  BoardView[]       @relation("BoardViewCreator")
   itemVersions       ItemVersion[]     @relation("ItemVersionUser")
   docEmbeds          DocEmbed[]        @relation("DocEmbedCreator")
+  integrationConfigs IntegrationConfig[] @relation("IntegrationConfigCreator")
 
   @@map("users")
 }
@@ -146,6 +147,8 @@ model Board {
   guestAccess GuestAccess[]
   milestones  Milestone[]
   webhooks    Webhook[]
+  connectLinks ConnectColumn[] @relation("ConnectTargetBoard")
+  integrationConfigs IntegrationConfig[]
 
   auditLogs   AuditLog[]
   @@map("boards")
@@ -156,6 +159,7 @@ enum BoardKind {
   TABLE
   TIMELINE
   CALENDAR
+  GANTT
   FORM
   PRIVATE
 }
@@ -193,6 +197,7 @@ model BoardColumn {
   updatedAt  DateTime   @updatedAt
   board      Board      @relation(fields: [boardId], references: [id], onDelete: Cascade)
   values     ColumnValue[]
+  connectLinks ConnectColumn[]
 
   @@map("board_columns")
 }
@@ -227,6 +232,9 @@ enum ColumnType {
   TIME_TRACKING
   FORM_LINK
   MILESTONE
+  CONNECT
+  MIRROR
+  ROLLUP
 }
 
 // ─── GROUPS & ITEMS ─────────────────────────────────────
@@ -272,8 +280,26 @@ model Item {
   // Dependencies
   dependenciesFrom Dependency[] @relation("DependencyFrom")
   dependenciesTo   Dependency[] @relation("DependencyTo")
+  connectSourceLinks ConnectColumn[] @relation("ConnectSource")
+  connectTargetLinks ConnectColumn[] @relation("ConnectTarget")
 
   @@map("items")
+}
+
+model ConnectColumn {
+  id            String     @id @default(uuid())
+  columnId      String
+  sourceItemId  String
+  targetItemId  String
+  targetBoardId String
+  createdAt     DateTime   @default(now())
+  column        BoardColumn @relation(fields: [columnId], references: [id], onDelete: Cascade)
+  sourceItem    Item       @relation("ConnectSource", fields: [sourceItemId], references: [id], onDelete: Cascade)
+  targetItem    Item       @relation("ConnectTarget", fields: [targetItemId], references: [id], onDelete: Cascade)
+  targetBoard   Board      @relation("ConnectTargetBoard", fields: [targetBoardId], references: [id], onDelete: Cascade)
+
+  @@unique([columnId, sourceItemId, targetItemId])
+  @@map("connect_columns")
 }
 
 model Subitem {
@@ -459,23 +485,29 @@ model Automation {
 enum AutomationTrigger {
   STATUS_CHANGED
   DATE_ARRIVES
+  DATE_ARRIVED
   ITEM_CREATED
+  ITEM_UPDATED
   ITEM_MOVED_TO_GROUP
   PRIORITY_CHANGED
   ASSIGNEE_CHANGED
   COLUMN_VALUE_CHANGED
+  COLUMN_CHANGED
   RECURRING_SCHEDULE
 }
 
 enum AutomationAction {
   CHANGE_STATUS
   MOVE_ITEM_TO_GROUP
+  SEND_NOTIFICATION
   NOTIFY_ASSIGNEE
   NOTIFY_USER
   SET_COLUMN_VALUE
+  UPDATE_COLUMN
   CREATE_ITEM
   SEND_EMAIL
   ASSIGN_USER
+  ADD_TAG
   SHIFT_DATE
 }
 
@@ -704,4 +736,18 @@ model AuditLog {
   board     Board?   @relation(fields: [boardId], references: [id], onDelete: SetNull)
 
   @@map("audit_logs")
+}
+
+model IntegrationConfig {
+  id          String   @id @default(uuid())
+  type        String
+  config      Json
+  enabled     Boolean  @default(true)
+  createdById String
+  boardId     String?
+  createdAt   DateTime @default(now())
+  createdBy   User     @relation("IntegrationConfigCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  board       Board?   @relation(fields: [boardId], references: [id], onDelete: Cascade)
+
+  @@map("integration_configs")
 }

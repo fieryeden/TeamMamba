@@ -21,6 +21,7 @@ import {
   List,
   MoreHorizontal,
   Plus,
+  Sparkles,
   Trash2,
   X,
   Zap,
@@ -49,6 +50,8 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn, formatRelativeTime } from "@/lib/utils";
 import { useBoardSocket } from "@/hooks/use-board-socket";
 import { useWorkspacePresence } from "@/hooks/use-workspace-presence";
+import { GanttView } from "@/components/boards/gantt-view";
+import { AIPanel } from "@/components/ai/ai-panel";
 
 interface ColumnValue {
   id: string;
@@ -191,7 +194,7 @@ interface BoardClientProps {
   };
 }
 
-type ViewMode = "TABLE" | "KANBAN" | "CALENDAR" | "TIMELINE";
+type ViewMode = "TABLE" | "KANBAN" | "CALENDAR" | "TIMELINE" | "GANTT";
 type SortState = { columnId: string; direction: "asc" | "desc" } | null;
 type FilterOperator = "equals" | "not_equals" | "contains" | "is_empty" | "is_not_empty";
 type FilterLogic = "AND" | "OR";
@@ -313,6 +316,7 @@ export function BoardClient({ user, board }: BoardClientProps) {
   const [newGroupName, setNewGroupName] = useState("");
   const [showAutomationModal, setShowAutomationModal] = useState(false);
   const [showColumnModal, setShowColumnModal] = useState(false);
+  const [showAiPanel, setShowAiPanel] = useState(false);
   const [localComments, setLocalComments] = useState<Record<string, ItemComment[]>>({});
   const [localActivities, setLocalActivities] = useState<Record<string, Array<{ id: string; text: string; createdAt: string }>>>({});
   const [expandedSubitems, setExpandedSubitems] = useState<Record<string, boolean>>({});
@@ -533,6 +537,7 @@ export function BoardClient({ user, board }: BoardClientProps) {
         if (e.key === "2") { setViewMode("KANBAN"); return; }
         if (e.key === "3") { setViewMode("CALENDAR"); return; }
         if (e.key === "4") { setViewMode("TIMELINE"); return; }
+        if (e.key === "5") { setViewMode("GANTT"); return; }
         if (e.key === "?") { setShowShortcutsHelp((v) => !v); return; }
       }
     };
@@ -708,6 +713,34 @@ export function BoardClient({ user, board }: BoardClientProps) {
       }
     } catch (err) {
       console.error("Failed to upload file:", err);
+    }
+  }, [upsertColumnValueInState]);
+
+  const handleConnectItems = useCallback(async (payload: {
+    action: "link" | "unlink";
+    columnId: string;
+    sourceItemId: string;
+    targetItemId: string;
+    targetBoardId: string;
+  }) => {
+    try {
+      const res = await fetch("/api/columns/values/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) return;
+      const json = await res.json();
+      if (json.columnValue) {
+        upsertColumnValueInState(payload.sourceItemId, json.columnValue as ColumnValue);
+      }
+      if (Array.isArray(json.derivedValues)) {
+        for (const entry of json.derivedValues as ColumnValue[]) {
+          upsertColumnValueInState(payload.sourceItemId, entry);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to update connect links:", err);
     }
   }, [upsertColumnValueInState]);
 
@@ -1221,6 +1254,9 @@ export function BoardClient({ user, board }: BoardClientProps) {
                 <TabsTrigger value="TIMELINE" className="px-2 text-xs">
                   <Calendar className="mr-1 h-3 w-3" /> Timeline
                 </TabsTrigger>
+                <TabsTrigger value="GANTT" className="px-2 text-xs">
+                  <CalendarDays className="mr-1 h-3 w-3" /> Gantt
+                </TabsTrigger>
               </TabsList>
             </Tabs>
 
@@ -1402,6 +1438,14 @@ export function BoardClient({ user, board }: BoardClientProps) {
             <Button variant="ghost" size="sm" className="h-8" onClick={handleShareBoard}>
               Share
             </Button>
+            <Button
+              variant={showAiPanel ? "default" : "ghost"}
+              size="sm"
+              className={cn("h-8", showAiPanel && "bg-mamba-600 hover:bg-mamba-700")}
+              onClick={() => setShowAiPanel((prev) => !prev)}
+            >
+              <Sparkles className="mr-1 h-3.5 w-3.5" /> AI
+            </Button>
             <input
               ref={importInputRef}
               type="file"
@@ -1416,11 +1460,17 @@ export function BoardClient({ user, board }: BoardClientProps) {
             />
           </div>
         </div>
+        {showAiPanel && (
+          <div className="mt-3 max-w-md">
+            <AIPanel boardId={board.id} onClose={() => setShowAiPanel(false)} />
+          </div>
+        )}
       </div>
 
       <div className="flex-1 overflow-hidden">
         {viewMode === "TABLE" && (
           <TableView
+            boardId={board.id}
             groups={filteredGroups}
             columns={columns}
             sortState={sortState}
@@ -1432,6 +1482,7 @@ export function BoardClient({ user, board }: BoardClientProps) {
             onCycleStatus={handleCycleStatus}
             onUpdateValue={handleUpdateValue}
             onUploadFile={handleUploadFile}
+            onConnectItems={handleConnectItems}
             newItemName={newItemName}
             setNewItemName={setNewItemName}
             showNewItem={showNewItem}
@@ -1475,6 +1526,16 @@ export function BoardClient({ user, board }: BoardClientProps) {
             groups={filteredGroups}
             columns={columns}
             searchQuery={normalizedSearchQuery}
+            onSelectItem={(itemId) => setSelectedItemId(itemId)}
+          />
+        )}
+
+        {viewMode === "GANTT" && (
+          <GanttView
+            boardId={board.id}
+            groups={filteredGroups}
+            columns={columns}
+            onUpdateValue={handleUpdateValue}
             onSelectItem={(itemId) => setSelectedItemId(itemId)}
           />
         )}
@@ -1558,7 +1619,7 @@ export function BoardClient({ user, board }: BoardClientProps) {
       )}
 
       {showColumnModal && (
-        <AddColumnModal boardId={board.id} onClose={() => setShowColumnModal(false)} />
+        <AddColumnModal boardId={board.id} columns={columns} onClose={() => setShowColumnModal(false)} />
       )}
     </div>
   );
@@ -1689,6 +1750,7 @@ function CalendarView({
 }
 
 function TableView({
+  boardId,
   groups,
   columns,
   sortState,
@@ -1698,6 +1760,7 @@ function TableView({
   onCycleStatus,
   onUpdateValue,
   onUploadFile,
+  onConnectItems,
   newItemName,
   setNewItemName,
   showNewItem,
@@ -1714,6 +1777,7 @@ function TableView({
   onSelectAll,
   onReorderItems,
 }: {
+  boardId: string;
   groups: Group[];
   columns: Column[];
   sortState: SortState;
@@ -1723,6 +1787,13 @@ function TableView({
   onCycleStatus: (itemId: string, cv: ColumnValue) => void;
   onUpdateValue: (valueId: string, value: unknown) => void;
   onUploadFile: (itemId: string, columnId: string, file: File) => void;
+  onConnectItems: (payload: {
+    action: "link" | "unlink";
+    columnId: string;
+    sourceItemId: string;
+    targetItemId: string;
+    targetBoardId: string;
+  }) => void;
   newItemName: Record<string, string>;
   setNewItemName: Dispatch<SetStateAction<Record<string, string>>>;
   showNewItem: Record<string, boolean>;
@@ -1841,12 +1912,14 @@ function TableView({
           {groups.map((group) => (
             <GroupRows
               key={group.id}
+              boardId={boardId}
               group={group}
               columns={columns}
               sortedItems={getSortedItems(group.items)}
               onCycleStatus={onCycleStatus}
               onUpdateValue={onUpdateValue}
               onUploadFile={onUploadFile}
+              onConnectItems={onConnectItems}
               newItemName={newItemName}
               setNewItemName={setNewItemName}
               showNewItem={showNewItem}
@@ -1887,12 +1960,14 @@ function TableView({
 }
 
 function GroupRows({
+  boardId,
   group,
   columns,
   sortedItems,
   onCycleStatus,
   onUpdateValue,
   onUploadFile,
+  onConnectItems,
   newItemName,
   setNewItemName,
   showNewItem,
@@ -1907,12 +1982,20 @@ function GroupRows({
   selectedItemIds,
   onToggleItemSelect,
 }: {
+  boardId: string;
   group: Group;
   columns: Column[];
   sortedItems: Item[];
   onCycleStatus: (itemId: string, cv: ColumnValue) => void;
   onUpdateValue: (valueId: string, value: unknown) => void;
   onUploadFile: (itemId: string, columnId: string, file: File) => void;
+  onConnectItems: (payload: {
+    action: "link" | "unlink";
+    columnId: string;
+    sourceItemId: string;
+    targetItemId: string;
+    targetBoardId: string;
+  }) => void;
   newItemName: Record<string, string>;
   setNewItemName: Dispatch<SetStateAction<Record<string, string>>>;
   showNewItem: Record<string, boolean>;
@@ -2039,11 +2122,13 @@ function GroupRows({
                       onClick={(event) => event.stopPropagation()}
                     >
                       <CellRenderer
+                        boardId={boardId}
                         item={item}
                         column={column}
                         onCycleStatus={onCycleStatus}
                         onUpdateValue={onUpdateValue}
                         onUploadFile={onUploadFile}
+                        onConnectItems={onConnectItems}
                         onSelectItem={onSelectItem}
                       />
                     </td>
@@ -2154,22 +2239,82 @@ function GroupRows({
 }
 
 function CellRenderer({
+  boardId,
   item,
   column,
   onCycleStatus,
   onUpdateValue,
   onUploadFile,
+  onConnectItems,
   onSelectItem,
 }: {
+  boardId: string;
   item: Item;
   column: Column;
   onCycleStatus: (itemId: string, cv: ColumnValue) => void;
   onUpdateValue: (valueId: string, value: unknown) => void;
   onUploadFile: (itemId: string, columnId: string, file: File) => void;
+  onConnectItems: (payload: {
+    action: "link" | "unlink";
+    columnId: string;
+    sourceItemId: string;
+    targetItemId: string;
+    targetBoardId: string;
+  }) => void;
   onSelectItem: (itemId: string) => void;
 }) {
   const cv = item.columnValues.find((value) => value.column.id === column.id);
   const rawValue = cv?.value;
+
+  if (column.columnType === "CONNECT") {
+    return (
+      <ConnectCell
+        boardId={boardId}
+        itemId={item.id}
+        columnId={column.id}
+        value={rawValue}
+        onConnectItems={onConnectItems}
+      />
+    );
+  }
+
+  if (column.columnType === "MIRROR") {
+    if (rawValue == null) return <span className="text-xs text-muted-foreground">-</span>;
+    if (Array.isArray(rawValue)) {
+      return (
+        <div className="space-y-1">
+          {rawValue.slice(0, 2).map((entry, idx) => {
+            const row = entry as Record<string, unknown>;
+            return (
+              <div key={`${column.id}-mirror-${idx}`} className="rounded bg-muted/50 px-1.5 py-0.5 text-[10px]">
+                {(typeof row.itemName === "string" ? `${row.itemName}: ` : "") + asString(row.value)}
+              </div>
+            );
+          })}
+          {rawValue.length > 2 && <div className="text-[10px] text-muted-foreground">+{rawValue.length - 2} more</div>}
+        </div>
+      );
+    }
+    if (typeof rawValue === "object") {
+      const row = rawValue as Record<string, unknown>;
+      return (
+        <span className="text-xs text-muted-foreground">
+          {(typeof row.itemName === "string" ? `${row.itemName}: ` : "") + asString(row.value)}
+        </span>
+      );
+    }
+    return <span className="text-xs text-muted-foreground">{asString(rawValue)}</span>;
+  }
+
+  if (column.columnType === "ROLLUP") {
+    const entry = rawValue && typeof rawValue === "object" ? (rawValue as Record<string, unknown>) : null;
+    if (!entry) return <span className="text-xs text-muted-foreground">-</span>;
+    return (
+      <span className="text-xs text-muted-foreground">
+        {(typeof entry.operation === "string" ? entry.operation : "ROLLUP")}: {asString(entry.value)} ({asString(entry.count)} links)
+      </span>
+    );
+  }
 
   if (column.columnType === "ITEM_ID") {
     return <span className="text-xs font-mono text-muted-foreground">{item.id.slice(0, 8)}</span>;
@@ -2481,6 +2626,144 @@ function CellRenderer({
       onBlur={(event) => onUpdateValue(cv.id, event.target.value)}
       className="h-8 border-0 px-1 text-xs"
     />
+  );
+}
+
+function ConnectCell({
+  boardId,
+  itemId,
+  columnId,
+  value,
+  onConnectItems,
+}: {
+  boardId: string;
+  itemId: string;
+  columnId: string;
+  value: unknown;
+  onConnectItems: (payload: {
+    action: "link" | "unlink";
+    columnId: string;
+    sourceItemId: string;
+    targetItemId: string;
+    targetBoardId: string;
+  }) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const [options, setOptions] = useState<Array<{ id: string; name: string; boardId: string; boardName: string }>>([]);
+
+  const selected = useMemo(() => {
+    if (!Array.isArray(value)) return [];
+    return value
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") return null;
+        const row = entry as Record<string, unknown>;
+        const id = typeof row.id === "string" ? row.id : null;
+        const name = typeof row.name === "string" ? row.name : "Linked item";
+        const linkedBoardId = typeof row.boardId === "string" ? row.boardId : "";
+        const linkedBoardName = typeof row.boardName === "string" ? row.boardName : "Board";
+        if (!id) return null;
+        return { id, name, boardId: linkedBoardId, boardName: linkedBoardName };
+      })
+      .filter((entry): entry is { id: string; name: string; boardId: string; boardName: string } => Boolean(entry));
+  }, [value]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    const run = async () => {
+      try {
+        const res = await fetch(`/api/boards/${boardId}/connect-options?q=${encodeURIComponent(query.trim())}`);
+        if (!res.ok) return;
+        const json = await res.json();
+        const next = ((json.boards ?? []) as Array<{
+          id: string;
+          name: string;
+          items: Array<{ id: string; name: string; boardId: string; boardName: string }>;
+        }>)
+          .flatMap((board) =>
+            board.items.map((item) => ({
+              id: item.id,
+              name: item.name,
+              boardId: board.id,
+              boardName: board.name,
+            }))
+          )
+          .filter((option) => !selected.some((entry) => entry.id === option.id))
+          .slice(0, 24);
+        if (!cancelled) setOptions(next);
+      } catch {
+        if (!cancelled) setOptions([]);
+      }
+    };
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [boardId, open, query, selected]);
+
+  return (
+    <div className="relative space-y-1">
+      {selected.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {selected.map((entry) => (
+            <span key={entry.id} className="inline-flex items-center gap-1 rounded-full border bg-muted px-1.5 py-0.5 text-[10px]">
+              {entry.boardName}: {entry.name}
+              <button
+                className="text-muted-foreground hover:text-destructive"
+                onClick={() =>
+                  onConnectItems({
+                    action: "unlink",
+                    columnId,
+                    sourceItemId: itemId,
+                    targetItemId: entry.id,
+                    targetBoardId: entry.boardId,
+                  })
+                }
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <Input
+        value={query}
+        onChange={(event) => {
+          setQuery(event.target.value);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 120)}
+        placeholder="Link item..."
+        className="h-7 px-2 text-[11px]"
+      />
+      {open && options.length > 0 && (
+        <div className="absolute left-0 top-full z-30 mt-1 max-h-48 w-[260px] overflow-auto rounded-md border bg-popover p-1 shadow-lg">
+          {options.map((option) => (
+            <button
+              key={option.id}
+              className="flex w-full items-center justify-between rounded px-2 py-1 text-left text-[11px] hover:bg-accent"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                onConnectItems({
+                  action: "link",
+                  columnId,
+                  sourceItemId: itemId,
+                  targetItemId: option.id,
+                  targetBoardId: option.boardId,
+                });
+                setQuery("");
+                setOpen(false);
+              }}
+            >
+              <span className="truncate">{option.name}</span>
+              <span className="ml-2 shrink-0 text-[10px] text-muted-foreground">{option.boardName}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -3857,9 +4140,20 @@ function AutomationModal({
   );
 }
 
-function AddColumnModal({ boardId, onClose }: { boardId: string; onClose: () => void }) {
+function AddColumnModal({
+  boardId,
+  columns,
+  onClose,
+}: {
+  boardId: string;
+  columns: Column[];
+  onClose: () => void;
+}) {
   const [title, setTitle] = useState("");
   const [columnType, setColumnType] = useState("TEXT");
+  const [connectColumnId, setConnectColumnId] = useState("");
+  const [targetColumnId, setTargetColumnId] = useState("");
+  const [rollupOperation, setRollupOperation] = useState("COUNT");
 
   const columnTypes = [
     { value: "TEXT", label: "Text" },
@@ -3871,15 +4165,37 @@ function AddColumnModal({ boardId, onClose }: { boardId: string; onClose: () => 
     { value: "TAGS", label: "Tags" },
     { value: "CHECKBOX", label: "Checkbox" },
     { value: "PROGRESS", label: "Progress" },
+    { value: "CONNECT", label: "Connect" },
+    { value: "MIRROR", label: "Mirror" },
+    { value: "ROLLUP", label: "Rollup" },
   ];
+
+  const connectColumns = columns.filter((column) => column.columnType === "CONNECT");
+  const valueColumns = columns.filter((column) => !["CONNECT", "MIRROR", "ROLLUP"].includes(column.columnType));
 
   const handleCreate = async () => {
     if (!title.trim()) return;
+    const config = (() => {
+      if (columnType === "MIRROR") {
+        return {
+          connectColumnId,
+          targetColumnId,
+        };
+      }
+      if (columnType === "ROLLUP") {
+        return {
+          connectColumnId,
+          targetColumnId,
+          operation: rollupOperation,
+        };
+      }
+      return undefined;
+    })();
 
     await fetch(`/api/columns/${boardId}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ boardId, title, columnType }),
+      body: JSON.stringify({ boardId, title, columnType, config }),
     });
 
     onClose();
@@ -3917,6 +4233,52 @@ function AddColumnModal({ boardId, onClose }: { boardId: string; onClose: () => 
               ))}
             </div>
           </div>
+
+          {(columnType === "MIRROR" || columnType === "ROLLUP") && (
+            <div className="space-y-2 rounded-md border p-3">
+              <p className="text-xs font-semibold text-muted-foreground">Derived Column Config</p>
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">Connect column</label>
+                <select
+                  className="h-8 w-full rounded-md border bg-background px-2 text-xs"
+                  value={connectColumnId}
+                  onChange={(event) => setConnectColumnId(event.target.value)}
+                >
+                  <option value="">Select connect column</option>
+                  {connectColumns.map((column) => (
+                    <option key={column.id} value={column.id}>{column.title}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">Target column to read</label>
+                <select
+                  className="h-8 w-full rounded-md border bg-background px-2 text-xs"
+                  value={targetColumnId}
+                  onChange={(event) => setTargetColumnId(event.target.value)}
+                >
+                  <option value="">Select target column</option>
+                  {valueColumns.map((column) => (
+                    <option key={column.id} value={column.id}>{column.title}</option>
+                  ))}
+                </select>
+              </div>
+              {columnType === "ROLLUP" && (
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">Aggregation</label>
+                  <select
+                    className="h-8 w-full rounded-md border bg-background px-2 text-xs"
+                    value={rollupOperation}
+                    onChange={(event) => setRollupOperation(event.target.value)}
+                  >
+                    {["COUNT", "SUM", "AVG", "MIN", "MAX"].map((op) => (
+                      <option key={op} value={op}>{op}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         <DialogFooter>

@@ -29,6 +29,20 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    const boardItems = await prisma.item.findMany({
+      where: { boardId: data.boardId },
+      select: { id: true },
+    });
+    if (boardItems.length > 0) {
+      await prisma.columnValue.createMany({
+        data: boardItems.map((item) => ({
+          itemId: item.id,
+          columnId: column.id,
+          value: null as any,
+        })),
+      });
+    }
+
     return NextResponse.json({ column }, { status: 201 });
   } catch (err) {
     console.error("Create column error:", err);

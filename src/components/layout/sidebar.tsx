@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, FolderKanban, Settings, Zap, Bell, Users,
-  BarChart3, FileText, Webhook, Activity,
+  BarChart3, FileText, Webhook, Activity, Plug,
 } from "lucide-react";
 
 interface SidebarProps {
@@ -34,6 +34,7 @@ export function DashboardSidebar({ user, dashboards = [], className, onNavigate 
     { href: "/automations", label: "Automations", icon: Zap },
     { href: "/activities", label: "Activity", icon: Activity },
     { href: "/webhooks", label: "Webhooks", icon: Webhook },
+      { href: "/integrations", label: "Integrations", icon: Plug },
     { href: "/team", label: "Team", icon: Users },
     { href: "/notifications", label: "Notifications", icon: Bell },
     { href: "/settings", label: "Settings", icon: Settings },

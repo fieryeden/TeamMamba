@@ -1,697 +1,553 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Zap, Plus, ToggleLeft, ToggleRight, Trash2, MoreHorizontal, Pencil } from "lucide-react";
-import { Card, CardContent } from "@/components/ui/card";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogFooter,
 } from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { formatDate } from "@/lib/utils";
 
 interface Automation {
   id: string;
-  boardId?: string;
   name: string;
   trigger: string;
   action: string;
-  conditions: unknown;
-  actionConfig: unknown;
-  isEnabled: boolean;
-  lastFiredAt: string | null;
-  createdAt: string;
-  board: { id: string; name: string; workspace: { id: string; name: string } };
+  conditions?: unknown;
+  actionConfig?: unknown;
+  enabled?: boolean;
+  board?: { id: string; name: string; workspace?: { id: string; name: string } };
 }
 
-interface BoardOption {
-  id: string;
-  name: string;
-  workspace: { id: string; name: string };
-  columns: Array<{ id: string; title: string; columnType: string }>;
-  groups: Array<{ id: string; name: string }>;
-}
-
-const triggerOptions = [
-  { value: "STATUS_CHANGED", label: "When status changes" },
-  { value: "DATE_ARRIVES", label: "When date arrives" },
-  { value: "ITEM_CREATED", label: "When item is created" },
-  { value: "ITEM_MOVED_TO_GROUP", label: "When item moves to group" },
-  { value: "PRIORITY_CHANGED", label: "When priority changes" },
-  { value: "ASSIGNEE_CHANGED", label: "When assignee changes" },
-  { value: "COLUMN_VALUE_CHANGED", label: "When any column value changes" },
-  { value: "RECURRING_SCHEDULE", label: "On a recurring schedule" },
+const TRIGGER_OPTIONS = [
+  { value: "STATUS_CHANGED", label: "Status changes" },
+  { value: "DATE_ARRIVED", label: "Date arrives" },
+  { value: "ITEM_CREATED", label: "Item created" },
+  { value: "ITEM_UPDATED", label: "Item updated" },
+  { value: "ITEM_MOVED_TO_GROUP", label: "Item moved to group" },
+  { value: "COLUMN_CHANGED", label: "Column value changes" },
 ];
 
-const actionOptions = [
-  { value: "CHANGE_STATUS", label: "Change status" },
-  { value: "MOVE_ITEM_TO_GROUP", label: "Move item to group" },
-  { value: "NOTIFY_ASSIGNEE", label: "Notify assignee" },
-  { value: "NOTIFY_USER", label: "Notify user" },
-  { value: "SET_COLUMN_VALUE", label: "Set column value" },
-  { value: "CREATE_ITEM", label: "Create item" },
-  { value: "SEND_EMAIL", label: "Send email" },
-  { value: "ASSIGN_USER", label: "Assign user" },
-  { value: "SHIFT_DATE", label: "Shift date" },
+const CONDITION_OPERATORS = [
+  { value: "field_equals", label: "equals" },
+  { value: "field_not_equals", label: "not equals" },
+  { value: "field_contains", label: "contains" },
+  { value: "field_is_empty", label: "is empty" },
+  { value: "field_greater_than", label: "greater than" },
+  { value: "field_less_than", label: "less than" },
 ];
 
-const triggerLabels = Object.fromEntries(triggerOptions.map((entry) => [entry.value, entry.label]));
-const actionLabels = Object.fromEntries(actionOptions.map((entry) => [entry.value, entry.label]));
+const ACTION_OPTIONS = [
+  { value: "change_status", label: "Change status" },
+  { value: "move_item_to_group", label: "Move to group" },
+  { value: "assign_user", label: "Assign user" },
+  { value: "send_notification", label: "Send notification" },
+  { value: "send_email", label: "Send email" },
+  { value: "create_item", label: "Create item" },
+  { value: "update_column", label: "Update column value" },
+  { value: "add_tag", label: "Add tag" },
+];
 
-type KeyValueRow = { id: string; key: string; value: string };
+const RECIPES = [
+  {
+    name: "Auto-complete: move to Done group",
+    description: "When status changes to Done, move item to the Completed group",
+    trigger: "STATUS_CHANGED",
+    conditions: { logic: "AND", conditions: [{ field: "column.status", operator: "field_equals", value: "Done" }] },
+    action: "move_item_to_group",
+    actionConfig: { targetGroupId: "completed" },
+  },
+  {
+    name: "Due date reminder",
+    description: "When a date arrives, notify the assignee",
+    trigger: "DATE_ARRIVED",
+    conditions: null,
+    action: "send_notification",
+    actionConfig: { toAssignees: true, title: "Due date reached", body: "An item you're assigned to has reached its due date." },
+  },
+  {
+    name: "New item auto-assign",
+    description: "When an item is created, assign it to the board owner",
+    trigger: "ITEM_CREATED",
+    conditions: null,
+    action: "assign_user",
+    actionConfig: { userId: "__owner__" },
+  },
+  {
+    name: "Stuck → notify team",
+    description: "When status changes to Stuck, send an email notification",
+    trigger: "STATUS_CHANGED",
+    conditions: { logic: "AND", conditions: [{ field: "column.status", operator: "field_equals", value: "Stuck" }] },
+    action: "send_email",
+    actionConfig: { to: "", subject: "Item stuck!", body: "An item on your board is now marked as Stuck." },
+  },
+  {
+    name: "Auto-tag by keyword",
+    description: "When item is updated and name contains 'bug', add the bug tag",
+    trigger: "ITEM_UPDATED",
+    conditions: { logic: "AND", conditions: [{ field: "name", operator: "field_contains", value: "bug" }] },
+    action: "add_tag",
+    actionConfig: { tag: "bug" },
+  },
+];
 
-const makeRow = (key = "", value = ""): KeyValueRow => ({
-  id: crypto.randomUUID(),
-  key,
-  value,
-});
-
-function formatFieldValue(value: unknown): string {
-  if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
+interface ConditionRow {
+  field: string;
+  operator: string;
+  value: string;
 }
 
-function parseMaybeJson(raw: string): unknown {
-  const trimmed = raw.trim();
-  if (!trimmed) return "";
-  if (trimmed === "true") return true;
-  if (trimmed === "false") return false;
-  if (trimmed === "null") return null;
-  if (!Number.isNaN(Number(trimmed)) && /^[-+]?\d*\.?\d+$/.test(trimmed)) {
-    return Number(trimmed);
-  }
-  if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
-    try {
-      return JSON.parse(trimmed);
-    } catch {
-      return trimmed;
-    }
-  }
-  return trimmed;
+interface ActionStep {
+  action: string;
+  config: Record<string, string>;
 }
 
-export function AutomationsClient({ automations: initial }: { automations: Automation[] }) {
-  const [automations, setAutomations] = useState(initial);
-  const [boards, setBoards] = useState<BoardOption[]>([]);
-  const [loadingBoards, setLoadingBoards] = useState(false);
-
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [isEditing, setIsEditing] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [step, setStep] = useState(1);
-
+export function AutomationsClient({ automations: initialAutomations }: { automations: Automation[] }) {
+  const [automations, setAutomations] = useState<Automation[]>(initialAutomations);
+  const [showBuilder, setShowBuilder] = useState(false);
+  const [builderStep, setBuilderStep] = useState<"trigger" | "conditions" | "actions" | "review">("trigger");
   const [name, setName] = useState("");
-  const [boardId, setBoardId] = useState("");
   const [trigger, setTrigger] = useState("STATUS_CHANGED");
-  const [action, setAction] = useState("CHANGE_STATUS");
+  const [conditions, setConditions] = useState<ConditionRow[]>([]);
+  const [conditionLogic, setConditionLogic] = useState<"AND" | "OR">("AND");
+  const [actions, setActions] = useState<ActionStep[]>([{ action: "change_status", config: {} }]);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState<string | null>(null);
 
-  const [conditions, setConditions] = useState<KeyValueRow[]>([makeRow()]);
-  const [actionConfigRows, setActionConfigRows] = useState<KeyValueRow[]>([makeRow()]);
+  const addCondition = () => setConditions((prev) => [...prev, { field: "", operator: "field_equals", value: "" }]);
+  const removeCondition = (idx: number) => setConditions((prev) => prev.filter((_, i) => i !== idx));
+  const updateCondition = (idx: number, key: keyof ConditionRow, val: string) =>
+    setConditions((prev) => prev.map((c, i) => (i === idx ? { ...c, [key]: val } : c)));
 
-  const selectedBoard = useMemo(
-    () => boards.find((board) => board.id === boardId),
-    [boardId, boards]
-  );
+  const addAction = () => setActions((prev) => [...prev, { action: "change_status", config: {} }]);
+  const removeAction = (idx: number) => setActions((prev) => prev.filter((_, i) => i !== idx));
+  const updateAction = (idx: number, key: "action" | string, val: string) =>
+    setActions((prev) =>
+      prev.map((a, i) => (i === idx ? (key === "action" ? { action: val, config: {} } : { ...a, config: { ...a.config, [key]: val } }) : a))
+    );
 
-  useEffect(() => {
-    if (!dialogOpen || boards.length > 0) return;
-
-    let mounted = true;
-    setLoadingBoards(true);
-    fetch("/api/boards")
-      .then((res) => res.json())
-      .then((json) => {
-        if (!mounted) return;
-        setBoards((json.boards ?? []) as BoardOption[]);
-      })
-      .finally(() => {
-        if (mounted) setLoadingBoards(false);
-      });
-
-    return () => {
-      mounted = false;
-    };
-  }, [dialogOpen, boards.length]);
-
-  useEffect(() => {
-    if (!dialogOpen || boardId || boards.length === 0) return;
-    setBoardId(boards[0].id);
-  }, [dialogOpen, boardId, boards]);
-
-  const resetDialog = () => {
-    setIsEditing(false);
-    setEditingId(null);
-    setStep(1);
+  const resetBuilder = () => {
     setName("");
-    setBoardId(boards[0]?.id ?? "");
     setTrigger("STATUS_CHANGED");
-    setAction("CHANGE_STATUS");
-    setConditions([makeRow()]);
-    setActionConfigRows([makeRow()]);
+    setConditions([]);
+    setConditionLogic("AND");
+    setActions([{ action: "change_status", config: {} }]);
+    setBuilderStep("trigger");
+    setShowBuilder(false);
   };
 
-  const openCreateDialog = () => {
-    resetDialog();
-    setDialogOpen(true);
-  };
-
-  const openEditDialog = (automation: Automation) => {
-    setDialogOpen(true);
-    setIsEditing(true);
-    setEditingId(automation.id);
-    setStep(1);
-    setName(automation.name);
-    setBoardId(automation.board.id);
-    setTrigger(automation.trigger);
-    setAction(automation.action);
-
-    const condObj = (automation.conditions as Record<string, unknown> | null) ?? {};
-    const nextConditions = Object.entries(condObj).map(([key, value]) => makeRow(key, formatFieldValue(value)));
-    setConditions(nextConditions.length > 0 ? nextConditions : [makeRow()]);
-
-    const configObj = (automation.actionConfig as Record<string, unknown> | null) ?? {};
-    const nextConfig = Object.entries(configObj).map(([key, value]) => makeRow(key, formatFieldValue(value)));
-    setActionConfigRows(nextConfig.length > 0 ? nextConfig : [makeRow()]);
-  };
-
-  const toObject = (rows: KeyValueRow[]) => {
-    const entries = rows
-      .filter((row) => row.key.trim().length > 0)
-      .map((row) => {
-        const key = row.key.trim();
-        if (key === "userIds") {
-          const values = row.value
-            .split(",")
-            .map((value) => value.trim())
-            .filter(Boolean);
-          return [key, values] as const;
-        }
-        return [key, parseMaybeJson(row.value)] as const;
-      });
-    return Object.fromEntries(entries);
-  };
-
-  const submitAutomation = async () => {
-    if (!name.trim() || !boardId) return;
-
-    const payload = {
-      ...(isEditing ? { id: editingId } : {}),
-      boardId,
-      name: name.trim(),
-      trigger,
-      action,
-      conditions: toObject(conditions),
-      actionConfig: toObject(actionConfigRows),
-    };
-
-    const res = await fetch("/api/automations", {
-      method: isEditing ? "PATCH" : "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-
-    if (!res.ok) return;
-    const json = await res.json();
-    const updated = json.automation as Automation & { boardId: string };
-    const updatedBoardId = updated.boardId || boardId;
-    const matchedBoard = boards.find((board) => board.id === updatedBoardId);
-
-    if (isEditing) {
-      setAutomations((prev) =>
-        prev.map((entry) =>
-          entry.id === updated.id
-            ? {
-                ...entry,
-                ...updated,
-                board: matchedBoard
-                  ? {
-                      id: updatedBoardId,
-                      name: matchedBoard.name,
-                      workspace: matchedBoard.workspace,
-                    }
-                  : entry.board,
-              }
-            : entry
-        )
-      );
+  const loadRecipe = (recipe: (typeof RECIPES)[number]) => {
+    setName(recipe.name);
+    setTrigger(recipe.trigger);
+    if (recipe.conditions && typeof recipe.conditions === "object") {
+      const rc = recipe.conditions as { logic?: string; conditions?: Array<{ field?: string; operator?: string; value?: unknown }> };
+      setConditionLogic(rc.logic === "OR" ? "OR" : "AND");
+      setConditions((rc.conditions ?? []).map((c) => ({ field: c.field ?? "", operator: c.operator ?? "field_equals", value: String(c.value ?? "") })));
     } else {
-      setAutomations((prev) => [
-        {
-          ...updated,
-          board: matchedBoard
-            ? { id: matchedBoard.id, name: matchedBoard.name, workspace: matchedBoard.workspace }
-            : { id: boardId, name: "Board", workspace: { id: "", name: "Workspace" } },
-        },
-        ...prev,
-      ]);
+      setConditions([]);
     }
-
-    setDialogOpen(false);
-    resetDialog();
+    setActions([{ action: recipe.action, config: ((recipe.actionConfig ?? {}) as unknown) as Record<string, string> }]);
+    setBuilderStep("trigger");
+    setShowBuilder(true);
   };
 
-  const toggleAutomation = async (id: string, enabled: boolean) => {
-    await fetch(`/api/automations`, {
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const primaryAction = actions[0]?.action ?? "change_status";
+      const primaryConfig = actions[0]?.config ?? {};
+      const multiActions = actions.length > 1 ? actions : undefined;
+
+      await fetch("/api/automations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          boardId: automations[0]?.board?.id ?? "",
+          name: name || "Untitled Automation",
+          trigger,
+          conditions: conditions.length
+            ? { logic: conditionLogic, conditions }
+            : undefined,
+          action: primaryAction.toUpperCase(),
+          actionConfig: multiActions
+            ? { ...primaryConfig, actions: multiActions.map((a) => ({ action: a.action, config: a.config })) }
+            : primaryConfig,
+        }),
+      });
+      setShowBuilder(false);
+      resetBuilder();
+      // Refresh list
+      const res = await fetch("/api/automations");
+      if (res.ok) {
+        const data = await res.json();
+        setAutomations(data.automations ?? data ?? []);
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    setDeleting(id);
+    try {
+      await fetch(`/api/automations/${id}`, { method: "DELETE" });
+      setAutomations((prev) => prev.filter((a) => a.id !== id));
+    } finally {
+      setDeleting(null);
+    }
+  };
+
+  const handleToggle = async (id: string, enabled: boolean) => {
+    await fetch(`/api/automations/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, isEnabled: !enabled }),
+      body: JSON.stringify({ enabled: !enabled }),
     });
-    setAutomations((prev) => prev.map((entry) => (entry.id === id ? { ...entry, isEnabled: !enabled } : entry)));
+    setAutomations((prev) => prev.map((a) => (a.id === id ? { ...a, enabled: !enabled } : a)));
   };
 
-  const deleteAutomation = async (id: string) => {
-    await fetch(`/api/automations`, {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id }),
-    });
-    setAutomations((prev) => prev.filter((entry) => entry.id !== id));
-  };
-
-  const renderActionPresets = () => {
-    const columnOptions = selectedBoard?.columns ?? [];
-    const statusColumns = columnOptions.filter((column) => column.columnType === "STATUS");
-    const dateColumns = columnOptions.filter((column) => column.columnType === "DATE");
-
-    const setField = (key: string, value: string) => {
-      setActionConfigRows((prev) => {
-        const existing = prev.find((row) => row.key === key);
-        if (!existing) return [...prev.filter((row) => row.key.trim()), makeRow(key, value)];
-        return prev.map((row) => (row.key === key ? { ...row, value } : row));
-      });
-    };
-
-    const getField = (key: string) => actionConfigRows.find((row) => row.key === key)?.value ?? "";
-
-    if (action === "CHANGE_STATUS") {
-      return (
-        <div className="grid gap-3 md:grid-cols-2">
-          <Select value={getField("targetColumnId") || "none"} onValueChange={(value) => setField("targetColumnId", value === "none" ? "" : value)}>
-            <SelectTrigger>
-              <SelectValue placeholder="Status column" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="none">Select status column</SelectItem>
-              {statusColumns.map((column) => (
-                <SelectItem key={column.id} value={column.id}>{column.title}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Input
-            placeholder='Target value (e.g. 2 or {"index":2,"label":"Done"})'
-            value={getField("targetValue")}
-            onChange={(event) => setField("targetValue", event.target.value)}
-          />
-        </div>
-      );
-    }
-
-    if (action === "MOVE_ITEM_TO_GROUP") {
-      return (
-        <Select value={getField("targetGroupId") || "none"} onValueChange={(value) => setField("targetGroupId", value === "none" ? "" : value)}>
-          <SelectTrigger>
-            <SelectValue placeholder="Target group" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="none">Select group</SelectItem>
-            {(selectedBoard?.groups ?? []).map((group) => (
-              <SelectItem key={group.id} value={group.id}>{group.name}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      );
-    }
-
-    if (action === "SET_COLUMN_VALUE") {
-      return (
-        <div className="grid gap-3 md:grid-cols-2">
-          <Select value={getField("columnId") || "none"} onValueChange={(value) => setField("columnId", value === "none" ? "" : value)}>
-            <SelectTrigger>
-              <SelectValue placeholder="Column" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="none">Select column</SelectItem>
-              {columnOptions.map((column) => (
-                <SelectItem key={column.id} value={column.id}>{column.title}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Input
-            placeholder="Value"
-            value={getField("value")}
-            onChange={(event) => setField("value", event.target.value)}
-          />
-        </div>
-      );
-    }
-
-    if (action === "SHIFT_DATE") {
-      return (
-        <div className="grid gap-3 md:grid-cols-2">
-          <Select value={getField("columnId") || "none"} onValueChange={(value) => setField("columnId", value === "none" ? "" : value)}>
-            <SelectTrigger>
-              <SelectValue placeholder="Date column" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="none">Select date column</SelectItem>
-              {dateColumns.map((column) => (
-                <SelectItem key={column.id} value={column.id}>{column.title}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Input
-            type="number"
-            placeholder="Days"
-            value={getField("days")}
-            onChange={(event) => setField("days", event.target.value)}
-          />
-        </div>
-      );
-    }
-
-    if (action === "CREATE_ITEM") {
-      return (
-        <div className="grid gap-3 md:grid-cols-2">
-          <Select value={getField("groupId") || "none"} onValueChange={(value) => setField("groupId", value === "none" ? "" : value)}>
-            <SelectTrigger>
-              <SelectValue placeholder="Group" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="none">Use current item group</SelectItem>
-              {(selectedBoard?.groups ?? []).map((group) => (
-                <SelectItem key={group.id} value={group.id}>{group.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Input
-            placeholder="New item name"
-            value={getField("itemName")}
-            onChange={(event) => setField("itemName", event.target.value)}
-          />
-        </div>
-      );
-    }
-
-    if (action === "SEND_EMAIL") {
-      return (
-        <div className="space-y-3">
-          <Input placeholder="To" value={getField("to")} onChange={(event) => setField("to", event.target.value)} />
-          <Input placeholder="Subject" value={getField("subject")} onChange={(event) => setField("subject", event.target.value)} />
-          <Input placeholder="Body" value={getField("body")} onChange={(event) => setField("body", event.target.value)} />
-        </div>
-      );
-    }
-
-    if (action === "NOTIFY_USER") {
-      return (
-        <div className="space-y-3">
-          <Input placeholder="User ID" value={getField("userId")} onChange={(event) => setField("userId", event.target.value)} />
-          <Input placeholder="Notification title" value={getField("title")} onChange={(event) => setField("title", event.target.value)} />
-          <Input placeholder="Notification body" value={getField("body")} onChange={(event) => setField("body", event.target.value)} />
-        </div>
-      );
-    }
-
-    if (action === "ASSIGN_USER") {
-      return (
-        <Input
-          placeholder="User IDs (comma separated)"
-          value={getField("userIds")}
-          onChange={(event) => setField("userIds", event.target.value)}
-        />
-      );
-    }
-
-    if (action === "NOTIFY_ASSIGNEE") {
-      return (
-        <div className="space-y-3">
-          <Input placeholder="Notification title" value={getField("title")} onChange={(event) => setField("title", event.target.value)} />
-          <Input placeholder="Notification body" value={getField("body")} onChange={(event) => setField("body", event.target.value)} />
-        </div>
-      );
-    }
-
-    return null;
-  };
-
-  const canGoNext =
-    (step === 1 && name.trim().length > 0 && boardId) ||
-    step === 2 ||
-    step === 3 ||
-    step === 4;
+  const stepIndex = ["trigger", "conditions", "actions", "review"].indexOf(builderStep);
 
   return (
-    <div className="space-y-6 max-w-3xl">
+    <div className="space-y-6 p-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <Zap className="h-6 w-6" /> Automations
-          </h1>
-          <p className="text-muted-foreground text-sm">Automate your workflow with custom rules</p>
+          <h1 className="text-2xl font-bold">Automations</h1>
+          <p className="text-sm text-muted-foreground">Build rules that run automatically when things change.</p>
         </div>
-        <Button className="bg-mamba-600 hover:bg-mamba-700" onClick={openCreateDialog}>
-          <Plus className="mr-1 h-4 w-4" /> Create Automation
+        <Button className="bg-mamba-600 hover:bg-mamba-700" onClick={() => { resetBuilder(); setShowBuilder(true); }}>
+          + New Automation
         </Button>
       </div>
 
-      {automations.length > 0 ? (
-        <div className="space-y-3">
-          {automations.map((auto) => (
-            <Card key={auto.id} className={auto.isEnabled ? "" : "opacity-60"}>
-              <CardContent className="flex items-center gap-4 py-3 px-4">
-                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-50 text-amber-600">
-                  <Zap className="h-5 w-5" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium text-sm">{auto.name}</span>
-                    {auto.isEnabled ? (
-                      <Badge className="bg-green-100 text-green-700 text-[10px]">Active</Badge>
-                    ) : (
-                      <Badge variant="secondary" className="text-[10px]">Disabled</Badge>
-                    )}
+      {/* Recipes */}
+      <div>
+        <h2 className="mb-3 text-lg font-semibold">Quick Recipes</h2>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+          {RECIPES.map((recipe) => (
+            <button
+              key={recipe.name}
+              className="rounded-lg border bg-card p-4 text-left transition-colors hover:border-mamba-500 hover:bg-accent/40"
+              onClick={() => loadRecipe(recipe)}
+            >
+              <div className="text-sm font-semibold">{recipe.name}</div>
+              <div className="mt-1 text-xs text-muted-foreground">{recipe.description}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Existing automations list */}
+      <div>
+        <h2 className="mb-3 text-lg font-semibold">Your Automations</h2>
+        {automations.length === 0 ? (
+          <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
+            No automations yet. Create one above or pick a recipe.
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {automations.map((automation) => (
+              <div key={automation.id} className="flex items-center justify-between rounded-lg border bg-card px-4 py-3">
+                <div className="flex items-center gap-3">
+                  <button
+                    className={`relative h-5 w-9 rounded-full transition-colors ${automation.enabled !== false ? "bg-mamba-600" : "bg-muted"}`}
+                    onClick={() => handleToggle(automation.id, automation.enabled !== false)}
+                  >
+                    <span
+                      className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${automation.enabled !== false ? "left-4" : "left-0.5"}`}
+                    />
+                  </button>
+                  <div>
+                    <div className="text-sm font-medium">{automation.name}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {automation.trigger.replace(/_/g, " ")} → {automation.action.replace(/_/g, " ")}
+                      {automation.board && <span className="ml-2">· {automation.board.name}</span>}
+                    </div>
                   </div>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    {(triggerLabels[auto.trigger] as string) || auto.trigger} → {(actionLabels[auto.action] as string) || auto.action}
-                  </p>
-                  <p className="text-[10px] text-muted-foreground">
-                    Board: {auto.board.name} ({auto.board.workspace.name})
-                    {auto.lastFiredAt && ` • Last fired ${formatDate(auto.lastFiredAt)}`}
-                  </p>
                 </div>
                 <Button
                   variant="ghost"
-                  size="icon"
-                  className="h-8 w-8"
-                  onClick={() => toggleAutomation(auto.id, auto.isEnabled)}
+                  size="sm"
+                  className="text-destructive hover:text-destructive"
+                  disabled={deleting === automation.id}
+                  onClick={() => handleDelete(automation.id)}
                 >
-                  {auto.isEnabled ? (
-                    <ToggleRight className="h-5 w-5 text-green-600" />
-                  ) : (
-                    <ToggleLeft className="h-5 w-5 text-muted-foreground" />
-                  )}
+                  Delete
                 </Button>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon" className="h-8 w-8">
-                      <MoreHorizontal className="h-4 w-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem onClick={() => openEditDialog(auto)}>
-                      <Pencil className="mr-2 h-3.5 w-3.5" /> Edit
-                    </DropdownMenuItem>
-                    <DropdownMenuItem className="text-destructive" onClick={() => deleteAutomation(auto.id)}>
-                      <Trash2 className="h-3 w-3 mr-2" /> Delete
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      ) : (
-        <Card>
-          <CardContent className="py-12 text-center">
-            <Zap className="h-12 w-12 mx-auto mb-3 text-muted-foreground/30" />
-            <h3 className="font-semibold mb-1">No automations yet</h3>
-            <p className="text-sm text-muted-foreground mb-4">
-              Automations run automatically when triggered, saving you time and keeping your boards in sync.
-            </p>
-            <Button className="bg-mamba-600 hover:bg-mamba-700" onClick={openCreateDialog}>
-              <Plus className="mr-1 h-4 w-4" /> Create Automation
-            </Button>
-          </CardContent>
-        </Card>
-      )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
-      <Dialog
-        open={dialogOpen}
-        onOpenChange={(open) => {
-          setDialogOpen(open);
-          if (!open) resetDialog();
-        }}
-      >
+      {/* Builder dialog */}
+      <Dialog open={showBuilder} onOpenChange={(open) => { if (!open) resetBuilder(); }}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>{isEditing ? "Edit Automation" : "Create Automation"}</DialogTitle>
-            <DialogDescription>
-              Step {step} of 4: {
-                step === 1 ? "Trigger + board" :
-                step === 2 ? "Conditions" :
-                step === 3 ? "Action" :
-                "Action config"
-              }
-            </DialogDescription>
+            <DialogTitle>Build Automation</DialogTitle>
           </DialogHeader>
 
-          <div className="space-y-4">
-            {step === 1 && (
-              <div className="space-y-3">
-                <Input placeholder="Automation name" value={name} onChange={(event) => setName(event.target.value)} />
-                <Select value={boardId} onValueChange={setBoardId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder={loadingBoards ? "Loading boards..." : "Select board"} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {boards.map((board) => (
-                      <SelectItem key={board.id} value={board.id}>
-                        {board.name} ({board.workspace.name})
-                      </SelectItem>
+          {/* Step indicators */}
+          <div className="flex items-center gap-2">
+            {["Trigger", "Conditions", "Actions", "Review"].map((label, idx) => (
+              <div key={label} className="flex items-center gap-2">
+                {idx > 0 && <div className={`h-0.5 w-8 ${idx <= stepIndex ? "bg-mamba-600" : "bg-muted"}`} />}
+                <button
+                  className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold ${
+                    idx === stepIndex ? "bg-mamba-600 text-white" : idx < stepIndex ? "bg-mamba-200 text-mamba-800" : "bg-muted text-muted-foreground"
+                  }`}
+                  onClick={() => setBuilderStep(["trigger", "conditions", "actions", "review"][idx] as typeof builderStep)}
+                >
+                  {idx + 1}
+                </button>
+                <span className={`text-xs ${idx === stepIndex ? "font-semibold" : "text-muted-foreground"}`}>{label}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="min-h-[200px] space-y-4">
+            {/* Step 1: Trigger */}
+            {builderStep === "trigger" && (
+              <div className="space-y-4">
+                <Input placeholder="Automation name" value={name} onChange={(e) => setName(e.target.value)} />
+                <div>
+                  <label className="mb-1 block text-sm font-medium">When this happens:</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {TRIGGER_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.value}
+                        className={`rounded-md border px-3 py-2 text-left text-sm transition-colors ${
+                          trigger === opt.value ? "border-mamba-600 bg-mamba-50" : "hover:bg-accent/40"
+                        }`}
+                        onClick={() => setTrigger(opt.value)}
+                      >
+                        {opt.label}
+                      </button>
                     ))}
-                  </SelectContent>
-                </Select>
-                <Select value={trigger} onValueChange={setTrigger}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select trigger" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {triggerOptions.map((entry) => (
-                      <SelectItem key={entry.value} value={entry.value}>{entry.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  </div>
+                </div>
               </div>
             )}
 
-            {step === 2 && (
-              <div className="space-y-2">
-                <p className="text-sm text-muted-foreground">
-                  Add optional conditions as key-value pairs (example key: <code>groupId</code> or <code>column.&lt;columnId&gt;</code>).
-                </p>
-                {conditions.map((row) => (
-                  <div key={row.id} className="grid grid-cols-[1fr_1fr_auto] gap-2">
+            {/* Step 2: Conditions */}
+            {builderStep === "conditions" && (
+              <div className="space-y-4">
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <span>Only if:</span>
+                  <button
+                    className={`rounded px-2 py-0.5 text-xs ${conditionLogic === "AND" ? "bg-mamba-600 text-white" : "bg-muted"}`}
+                    onClick={() => setConditionLogic("AND")}
+                  >
+                    AND
+                  </button>
+                  <button
+                    className={`rounded px-2 py-0.5 text-xs ${conditionLogic === "OR" ? "bg-mamba-600 text-white" : "bg-muted"}`}
+                    onClick={() => setConditionLogic("OR")}
+                  >
+                    OR
+                  </button>
+                </div>
+                {conditions.map((cond, idx) => (
+                  <div key={idx} className="flex items-center gap-2">
                     <Input
-                      placeholder="Condition key"
-                      value={row.key}
-                      onChange={(event) => setConditions((prev) => prev.map((entry) => entry.id === row.id ? { ...entry, key: event.target.value } : entry))}
+                      placeholder="Field (e.g. column.status)"
+                      value={cond.field}
+                      onChange={(e) => updateCondition(idx, "field", e.target.value)}
+                      className="flex-1"
                     />
-                    <Input
-                      placeholder="Condition value"
-                      value={row.value}
-                      onChange={(event) => setConditions((prev) => prev.map((entry) => entry.id === row.id ? { ...entry, value: event.target.value } : entry))}
-                    />
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => setConditions((prev) => prev.length === 1 ? [makeRow()] : prev.filter((entry) => entry.id !== row.id))}
+                    <select
+                      value={cond.operator}
+                      onChange={(e) => updateCondition(idx, "operator", e.target.value)}
+                      className="h-9 rounded-md border px-2 text-sm"
                     >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
+                      {CONDITION_OPERATORS.map((op) => (
+                        <option key={op.value} value={op.value}>{op.label}</option>
+                      ))}
+                    </select>
+                    {cond.operator !== "field_is_empty" && (
+                      <Input
+                        placeholder="Value"
+                        value={cond.value}
+                        onChange={(e) => updateCondition(idx, "value", e.target.value)}
+                        className="flex-1"
+                      />
+                    )}
+                    <Button variant="ghost" size="sm" onClick={() => removeCondition(idx)}>✕</Button>
                   </div>
                 ))}
-                <Button variant="outline" size="sm" onClick={() => setConditions((prev) => [...prev, makeRow()])}>
-                  <Plus className="mr-1 h-3.5 w-3.5" /> Add condition
-                </Button>
+                <Button variant="outline" size="sm" onClick={addCondition}>+ Add condition</Button>
+                {conditions.length === 0 && (
+                  <p className="text-xs text-muted-foreground">No conditions — the automation will run for every matching trigger.</p>
+                )}
               </div>
             )}
 
-            {step === 3 && (
-              <Select value={action} onValueChange={setAction}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select action" />
-                </SelectTrigger>
-                <SelectContent>
-                  {actionOptions.map((entry) => (
-                    <SelectItem key={entry.value} value={entry.value}>{entry.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+            {/* Step 3: Actions */}
+            {builderStep === "actions" && (
+              <div className="space-y-4">
+                <label className="block text-sm font-medium">Then do this:</label>
+                {actions.map((step, idx) => (
+                  <div key={idx} className="space-y-2 rounded-md border p-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-muted-foreground">Step {idx + 1}</span>
+                      {actions.length > 1 && (
+                        <Button variant="ghost" size="sm" onClick={() => removeAction(idx)}>✕</Button>
+                      )}
+                    </div>
+                    <select
+                      value={step.action}
+                      onChange={(e) => updateAction(idx, "action", e.target.value)}
+                      className="h-9 w-full rounded-md border px-2 text-sm"
+                    >
+                      {ACTION_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                    {(step.action === "change_status" || step.action === "update_column") && (
+                      <div className="grid grid-cols-2 gap-2">
+                        <Input
+                          placeholder="Column ID"
+                          value={step.config.columnId ?? ""}
+                          onChange={(e) => updateAction(idx, "columnId", e.target.value)}
+                        />
+                        <Input
+                          placeholder="Value"
+                          value={step.config.value ?? ""}
+                          onChange={(e) => updateAction(idx, "value", e.target.value)}
+                        />
+                      </div>
+                    )}
+                    {step.action === "move_item_to_group" && (
+                      <Input
+                        placeholder="Target Group ID"
+                        value={step.config.targetGroupId ?? ""}
+                        onChange={(e) => updateAction(idx, "targetGroupId", e.target.value)}
+                      />
+                    )}
+                    {step.action === "assign_user" && (
+                      <Input
+                        placeholder="User ID (or __owner__)"
+                        value={step.config.userId ?? ""}
+                        onChange={(e) => updateAction(idx, "userId", e.target.value)}
+                      />
+                    )}
+                    {step.action === "send_notification" && (
+                      <div className="space-y-2">
+                        <Input
+                          placeholder="Title"
+                          value={step.config.title ?? ""}
+                          onChange={(e) => updateAction(idx, "title", e.target.value)}
+                        />
+                        <Input
+                          placeholder="Body message"
+                          value={step.config.body ?? ""}
+                          onChange={(e) => updateAction(idx, "body", e.target.value)}
+                        />
+                      </div>
+                    )}
+                    {step.action === "send_email" && (
+                      <div className="space-y-2">
+                        <Input
+                          placeholder="To (email)"
+                          value={step.config.to ?? ""}
+                          onChange={(e) => updateAction(idx, "to", e.target.value)}
+                        />
+                        <Input
+                          placeholder="Subject"
+                          value={step.config.subject ?? ""}
+                          onChange={(e) => updateAction(idx, "subject", e.target.value)}
+                        />
+                        <Input
+                          placeholder="Body"
+                          value={step.config.body ?? ""}
+                          onChange={(e) => updateAction(idx, "body", e.target.value)}
+                        />
+                      </div>
+                    )}
+                    {step.action === "create_item" && (
+                      <div className="space-y-2">
+                        <Input
+                          placeholder="Item name"
+                          value={step.config.itemName ?? ""}
+                          onChange={(e) => updateAction(idx, "itemName", e.target.value)}
+                        />
+                        <Input
+                          placeholder="Group ID"
+                          value={step.config.groupId ?? ""}
+                          onChange={(e) => updateAction(idx, "groupId", e.target.value)}
+                        />
+                      </div>
+                    )}
+                    {step.action === "add_tag" && (
+                      <Input
+                        placeholder="Tag name"
+                        value={step.config.tag ?? ""}
+                        onChange={(e) => updateAction(idx, "tag", e.target.value)}
+                      />
+                    )}
+                  </div>
+                ))}
+                <Button variant="outline" size="sm" onClick={addAction}>+ Add action step</Button>
+              </div>
             )}
 
-            {step === 4 && (
+            {/* Step 4: Review */}
+            {builderStep === "review" && (
               <div className="space-y-3">
-                {renderActionPresets()}
-                <div className="space-y-2 border-t pt-3">
-                  <p className="text-xs text-muted-foreground">Additional action config key-value pairs</p>
-                  {actionConfigRows.map((row) => (
-                    <div key={row.id} className="grid grid-cols-[1fr_1fr_auto] gap-2">
-                      <Input
-                        placeholder="Config key"
-                        value={row.key}
-                        onChange={(event) => setActionConfigRows((prev) => prev.map((entry) => entry.id === row.id ? { ...entry, key: event.target.value } : entry))}
-                      />
-                      <Input
-                        placeholder="Config value"
-                        value={row.value}
-                        onChange={(event) => setActionConfigRows((prev) => prev.map((entry) => entry.id === row.id ? { ...entry, value: event.target.value } : entry))}
-                      />
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => setActionConfigRows((prev) => prev.length === 1 ? [makeRow()] : prev.filter((entry) => entry.id !== row.id))}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
+                <div className="rounded-md border p-3">
+                  <div className="text-xs font-semibold text-muted-foreground">Name</div>
+                  <div className="text-sm">{name || "Untitled Automation"}</div>
+                </div>
+                <div className="rounded-md border p-3">
+                  <div className="text-xs font-semibold text-muted-foreground">Trigger</div>
+                  <div className="text-sm">{TRIGGER_OPTIONS.find((o) => o.value === trigger)?.label ?? trigger}</div>
+                </div>
+                {conditions.length > 0 && (
+                  <div className="rounded-md border p-3">
+                    <div className="text-xs font-semibold text-muted-foreground">Conditions ({conditionLogic})</div>
+                    {conditions.map((c, i) => (
+                      <div key={i} className="text-sm">
+                        {c.field} {CONDITION_OPERATORS.find((o) => o.value === c.operator)?.label} {c.value || "(empty)"}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="rounded-md border p-3">
+                  <div className="text-xs font-semibold text-muted-foreground">Actions</div>
+                  {actions.map((a, i) => (
+                    <div key={i} className="text-sm">
+                      {i + 1}. {ACTION_OPTIONS.find((o) => o.value === a.action)?.label ?? a.action}
+                      {Object.keys(a.config).length > 0 && (
+                        <span className="ml-2 text-xs text-muted-foreground">
+                          ({Object.entries(a.config).map(([k, v]) => `${k}=${v}`).join(", ")})
+                        </span>
+                      )}
                     </div>
                   ))}
-                  <Button variant="outline" size="sm" onClick={() => setActionConfigRows((prev) => [...prev, makeRow()])}>
-                    <Plus className="mr-1 h-3.5 w-3.5" /> Add config row
-                  </Button>
                 </div>
               </div>
             )}
           </div>
 
-          <DialogFooter className="justify-between">
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={() => step > 1 && setStep((prev) => prev - 1)} disabled={step === 1}>
+          <DialogFooter>
+            <Button variant="ghost" onClick={resetBuilder}>Cancel</Button>
+            {stepIndex > 0 && (
+              <Button variant="outline" onClick={() => setBuilderStep(["trigger", "conditions", "actions", "review"][stepIndex - 1] as typeof builderStep)}>
                 Back
               </Button>
-              {step < 4 ? (
-                <Button onClick={() => canGoNext && setStep((prev) => prev + 1)} disabled={!canGoNext}>
-                  Next
-                </Button>
-              ) : (
-                <Button className="bg-mamba-600 hover:bg-mamba-700" onClick={submitAutomation}>
-                  {isEditing ? "Save Changes" : "Create Automation"}
-                </Button>
-              )}
-            </div>
-            <Button variant="ghost" onClick={() => setDialogOpen(false)}>Cancel</Button>
+            )}
+            {stepIndex < 3 ? (
+              <Button className="bg-mamba-600 hover:bg-mamba-700" onClick={() => setBuilderStep(["trigger", "conditions", "actions", "review"][stepIndex + 1] as typeof builderStep)}>
+                Next
+              </Button>
+            ) : (
+              <Button className="bg-mamba-600 hover:bg-mamba-700" disabled={saving} onClick={handleSave}>
+                {saving ? "Saving..." : "Create Automation"}
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
