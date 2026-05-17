@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { formatDate } from "@/lib/utils";
 import { useTheme } from "next-themes";
+import { NotificationPermission } from "@/components/pwa/notification-permission";
 
 interface SettingsClientProps {
   user: {
@@ -392,7 +393,7 @@ export function SettingsClient({ user, apiTokens: initialTokens }: SettingsClien
         </TabsContent>
 
         <TabsContent value="notifications" className="mt-4">
-          <Card>
+          <Card className="mb-4">
             <CardHeader>
               <CardTitle>Notification Preferences</CardTitle>
               <CardDescription>Choose what you want to be notified about</CardDescription>
@@ -424,6 +425,7 @@ export function SettingsClient({ user, apiTokens: initialTokens }: SettingsClien
               ))}
             </CardContent>
           </Card>
+          <NotificationPermission userId={user.id} />
         </TabsContent>
 
         <TabsContent value="security" className="mt-4">

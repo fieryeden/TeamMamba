@@ -27,6 +27,7 @@ type ExprNode =
 export interface FormulaEvaluationContext {
   currentItemValues?: Record<string, unknown>;
   boardColumnValues?: Record<string, unknown[]>;
+  boardItemValues?: Array<Record<string, unknown>>;
   now?: Date;
 }
 
@@ -356,6 +357,34 @@ function resolveBoardValues(context: FormulaEvaluationContext, key: string): unk
   return [];
 }
 
+function resolveRowValue(row: Record<string, unknown>, key: string): unknown {
+  if (key in row) return row[key];
+  const target = normalizeKey(key);
+  for (const [entryKey, entryValue] of Object.entries(row)) {
+    if (normalizeKey(entryKey) === target) return entryValue;
+  }
+  return null;
+}
+
+function resolveBoardSeries(context: FormulaEvaluationContext, key: string): unknown[] {
+  const rows = context.boardItemValues ?? [];
+  if (rows.length > 0) {
+    return rows.map((row) => resolveRowValue(row, key));
+  }
+  return resolveBoardValues(context, key);
+}
+
+function getArgSeries(arg: ExprNode, evaluated: unknown, context: FormulaEvaluationContext): unknown[] {
+  if (arg.type === "column_ref") {
+    const boardSeries = resolveBoardSeries(context, arg.key);
+    if (boardSeries.length > 0) return boardSeries;
+    const currentValue = resolveCurrentValue(context, arg.key);
+    return currentValue === null || currentValue === undefined ? [] : [currentValue];
+  }
+  if (Array.isArray(evaluated)) return flatten(evaluated);
+  return [evaluated];
+}
+
 function compareValues(left: unknown, right: unknown): number {
   const leftNumber = Number(left);
   const rightNumber = Number(right);
@@ -385,6 +414,39 @@ function formatDate(value: Date, format: string): string {
     .replace(/HH/g, pad(value.getHours()))
     .replace(/mm/g, pad(value.getMinutes()))
     .replace(/ss/g, pad(value.getSeconds()));
+}
+
+function addDateUnit(value: Date, amount: number, unit: string): Date {
+  const next = new Date(value);
+  const normalized = unit.toLowerCase();
+  if (normalized === "day" || normalized === "days") next.setDate(next.getDate() + amount);
+  else if (normalized === "week" || normalized === "weeks") next.setDate(next.getDate() + amount * 7);
+  else if (normalized === "month" || normalized === "months") next.setMonth(next.getMonth() + amount);
+  else if (normalized === "year" || normalized === "years") next.setFullYear(next.getFullYear() + amount);
+  else if (normalized === "hour" || normalized === "hours") next.setHours(next.getHours() + amount);
+  else if (normalized === "minute" || normalized === "minutes") next.setMinutes(next.getMinutes() + amount);
+  else if (normalized === "second" || normalized === "seconds") next.setSeconds(next.getSeconds() + amount);
+  else next.setDate(next.getDate() + amount);
+  return next;
+}
+
+function datedif(start: Date, end: Date, unit: string): number {
+  const msDiff = end.getTime() - start.getTime();
+  const normalized = unit.toLowerCase();
+  if (normalized === "week" || normalized === "weeks") return Math.floor(msDiff / (86400000 * 7));
+  if (normalized === "month" || normalized === "months") {
+    const months = (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth());
+    return months;
+  }
+  return Math.floor(msDiff / 86400000);
+}
+
+function weekNumber(value: Date): number {
+  const date = new Date(Date.UTC(value.getFullYear(), value.getMonth(), value.getDate()));
+  const dayNum = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  return Math.ceil((((date.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
 }
 
 function evaluate(node: ExprNode, context: FormulaEvaluationContext): unknown {
@@ -459,6 +521,25 @@ function evaluate(node: ExprNode, context: FormulaEvaluationContext): unknown {
     if (name === "LEN") return toString(evaluatedArgs[0]).length;
     if (name === "LOWER") return toString(evaluatedArgs[0]).toLowerCase();
     if (name === "UPPER") return toString(evaluatedArgs[0]).toUpperCase();
+    if (name === "MID") {
+      const text = toString(evaluatedArgs[0]);
+      const start = Math.max(1, Math.floor(toNumber(evaluatedArgs[1])));
+      const count = Math.max(0, Math.floor(toNumber(evaluatedArgs[2])));
+      return text.slice(start - 1, start - 1 + count);
+    }
+    if (name === "SUBSTITUTE") {
+      const [input, search, replacement] = evaluatedArgs;
+      return toString(input).split(toString(search)).join(toString(replacement));
+    }
+    if (name === "TRIM") return toString(evaluatedArgs[0]).replace(/\s+/g, " ").trim();
+    if (name === "TEXT") return toString(evaluatedArgs[0]);
+    if (name === "VALUE") return toNumber(evaluatedArgs[0]);
+    if (name === "FIND") {
+      const needle = toString(evaluatedArgs[0]);
+      const haystack = toString(evaluatedArgs[1]);
+      const index = haystack.indexOf(needle);
+      return index >= 0 ? index + 1 : 0;
+    }
 
     if (name === "TODAY") {
       const now = context.now ?? new Date();
@@ -474,23 +555,104 @@ function evaluate(node: ExprNode, context: FormulaEvaluationContext): unknown {
       if (!start || !end) return 0;
       return Math.round((end.getTime() - start.getTime()) / 86400000);
     }
+    if (name === "DATEADD") {
+      const input = toDate(evaluatedArgs[0]);
+      if (!input) return "";
+      const amount = Math.floor(toNumber(evaluatedArgs[1]));
+      const unit = toString(evaluatedArgs[2] ?? "days");
+      return addDateUnit(input, amount, unit).toISOString();
+    }
+    if (name === "DATEDIF") {
+      const start = toDate(evaluatedArgs[0]);
+      const end = toDate(evaluatedArgs[1]);
+      if (!start || !end) return 0;
+      return datedif(start, end, toString(evaluatedArgs[2] ?? "days"));
+    }
     if (name === "FORMAT_DATE") {
       const date = toDate(evaluatedArgs[0]);
       const format = toString(evaluatedArgs[1] ?? "YYYY-MM-DD");
       if (!date) return "";
       return formatDate(date, format);
     }
+    if (name === "WEEKDAY") {
+      const date = toDate(evaluatedArgs[0]);
+      if (!date) return 0;
+      return date.getDay() + 1;
+    }
+    if (name === "WEEKNUM") {
+      const date = toDate(evaluatedArgs[0]);
+      if (!date) return 0;
+      return weekNumber(date);
+    }
+
+    if (name === "SWITCH") {
+      if (evaluatedArgs.length < 3) return null;
+      const target = evaluatedArgs[0];
+      for (let i = 1; i + 1 < evaluatedArgs.length; i += 2) {
+        if (compareValues(target, evaluatedArgs[i]) === 0) return evaluatedArgs[i + 1];
+      }
+      return evaluatedArgs.length % 2 === 0 ? evaluatedArgs[evaluatedArgs.length - 1] : null;
+    }
+    if (name === "IFS") {
+      for (let i = 0; i + 1 < evaluatedArgs.length; i += 2) {
+        if (isTruthy(evaluatedArgs[i])) return evaluatedArgs[i + 1];
+      }
+      return evaluatedArgs.length % 2 === 1 ? evaluatedArgs[evaluatedArgs.length - 1] : null;
+    }
+    if (name === "COALESCE") {
+      for (const value of evaluatedArgs) {
+        if (value !== null && value !== undefined) return value;
+      }
+      return null;
+    }
+
+    if (name === "ABS") return Math.abs(toNumber(evaluatedArgs[0]));
+    if (name === "ROUND") {
+      const value = toNumber(evaluatedArgs[0]);
+      const digits = Math.max(0, Math.floor(toNumber(evaluatedArgs[1] ?? 0)));
+      const precision = 10 ** digits;
+      return Math.round(value * precision) / precision;
+    }
+    if (name === "CEIL") return Math.ceil(toNumber(evaluatedArgs[0]));
+    if (name === "FLOOR") return Math.floor(toNumber(evaluatedArgs[0]));
+    if (name === "MOD") return toNumber(evaluatedArgs[0]) % toNumber(evaluatedArgs[1]);
+    if (name === "POWER") return Math.pow(toNumber(evaluatedArgs[0]), toNumber(evaluatedArgs[1]));
+    if (name === "SQRT") return Math.sqrt(Math.max(0, toNumber(evaluatedArgs[0])));
+    if (name === "LOG" || name === "LN") {
+      const value = toNumber(evaluatedArgs[0]);
+      if (value <= 0) return 0;
+      return Math.log(value);
+    }
+    if (name === "PI") return Math.PI;
+    if (name === "RAND") return Math.random();
+
+    if (name === "COUNTIF" || name === "SUMIF" || name === "AVERAGEIF") {
+      if (name === "COUNTIF") {
+        const rangeValues = getArgSeries(node.args[0]!, evaluatedArgs[0], context);
+        const criteria = evaluatedArgs[1];
+        return rangeValues.filter((value) => compareValues(value, criteria) === 0).length;
+      }
+
+      const metricValues = getArgSeries(node.args[0]!, evaluatedArgs[0], context);
+      const criteriaValues = getArgSeries(node.args[1]!, evaluatedArgs[1], context);
+      const criteria = evaluatedArgs[2];
+      const length = Math.min(metricValues.length, criteriaValues.length);
+      const filteredMetrics: number[] = [];
+
+      for (let index = 0; index < length; index += 1) {
+        if (compareValues(criteriaValues[index], criteria) === 0) {
+          filteredMetrics.push(toNumber(metricValues[index]));
+        }
+      }
+
+      if (name === "SUMIF") return filteredMetrics.reduce((acc, value) => acc + value, 0);
+      if (!filteredMetrics.length) return 0;
+      return filteredMetrics.reduce((acc, value) => acc + value, 0) / filteredMetrics.length;
+    }
 
     if (AGGREGATE_FUNCTIONS.has(name)) {
       const aggregateValues = flatten(
-        node.args.map((arg) => {
-          if (arg.type === "column_ref") {
-            const boardValues = resolveBoardValues(context, arg.key);
-            if (boardValues.length > 0) return boardValues;
-            return [resolveCurrentValue(context, arg.key)];
-          }
-          return [evaluate(arg, context)];
-        })
+        node.args.map((arg, index) => getArgSeries(arg, evaluatedArgs[index], context))
       );
       const numericValues = aggregateValues.map((entry) => toNumber(entry));
 
@@ -509,6 +671,11 @@ function evaluate(node: ExprNode, context: FormulaEvaluationContext): unknown {
       }
       if (name === "MIN") return numericValues.length ? Math.min(...numericValues) : 0;
       if (name === "MAX") return numericValues.length ? Math.max(...numericValues) : 0;
+    }
+
+    if (name === "BOARD_LOOKUP") {
+      // TODO: cross-board lookup needs board/item relation traversal and access checks.
+      return "TODO: BOARD_LOOKUP not implemented";
     }
 
     throw new Error(`Unsupported function: ${name}`);

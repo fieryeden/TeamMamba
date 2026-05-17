@@ -51,16 +51,26 @@ export async function PATCH(
             currentValueContext[entry.column.title] = entry.value;
           }
 
-          const boardColumnValues = await prisma.columnValue.findMany({
-            where: { item: { boardId: itemData.boardId } },
-            include: { column: { select: { id: true, title: true } } },
+          const boardItemsWithValues = await prisma.item.findMany({
+            where: { boardId: itemData.boardId },
+            orderBy: { createdAt: "asc" },
+            include: {
+              columnValues: { include: { column: { select: { id: true, title: true } } } },
+            },
           });
           const boardValuesByKey: Record<string, unknown[]> = {};
-          for (const entry of boardColumnValues) {
-            if (!boardValuesByKey[entry.column.id]) boardValuesByKey[entry.column.id] = [];
-            boardValuesByKey[entry.column.id].push(entry.value);
-            if (!boardValuesByKey[entry.column.title]) boardValuesByKey[entry.column.title] = [];
-            boardValuesByKey[entry.column.title].push(entry.value);
+          const boardItemValues: Array<Record<string, unknown>> = [];
+          for (const boardItem of boardItemsWithValues) {
+            const row: Record<string, unknown> = {};
+            for (const entry of boardItem.columnValues) {
+              if (!boardValuesByKey[entry.column.id]) boardValuesByKey[entry.column.id] = [];
+              boardValuesByKey[entry.column.id].push(entry.value);
+              if (!boardValuesByKey[entry.column.title]) boardValuesByKey[entry.column.title] = [];
+              boardValuesByKey[entry.column.title].push(entry.value);
+              row[entry.column.id] = entry.value;
+              row[entry.column.title] = entry.value;
+            }
+            boardItemValues.push(row);
           }
 
           for (const formulaColumn of formulaColumns) {
@@ -71,6 +81,7 @@ export async function PATCH(
               computedValue = evaluateFormulaExpression(formula, {
                 currentItemValues: currentValueContext,
                 boardColumnValues: boardValuesByKey,
+                boardItemValues,
               });
             } catch {
               computedValue = null;

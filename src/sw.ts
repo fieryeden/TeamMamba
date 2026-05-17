@@ -1,5 +1,6 @@
 /// <reference lib="webworker" />
-/// <reference types="next" />
+
+const sw = self as unknown as ServiceWorkerGlobalScope;
 
 const CACHE_NAME = "teammamba-v1";
 const STATIC_ASSETS = [
@@ -11,16 +12,31 @@ const STATIC_ASSETS = [
   "/icon-512.png",
 ];
 
-// Install: cache static shell
-self.addEventListener("install", (event: ExtendableEvent) => {
+type MutationRecord = {
+  id: number;
+  url: string;
+  method: string;
+  headers?: Record<string, string>;
+  body?: string;
+};
+
+type SyncEventLike = ExtendableEvent & { tag: string };
+
+type PushPayload = {
+  title?: string;
+  body?: string;
+  data?: { url?: string };
+  actions?: Array<{ action: string; title: string; icon?: string }>;
+};
+
+sw.addEventListener("install", (event: ExtendableEvent) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_ASSETS))
   );
-  self.skipWaiting();
+  sw.skipWaiting();
 });
 
-// Activate: clean old caches
-self.addEventListener("activate", (event: ExtendableEvent) => {
+sw.addEventListener("activate", (event: ExtendableEvent) => {
   event.waitUntil(
     caches.keys().then((keys) =>
       Promise.all(
@@ -30,19 +46,16 @@ self.addEventListener("activate", (event: ExtendableEvent) => {
       )
     )
   );
-  self.clients.claim();
+  sw.clients.claim();
 });
 
-// Fetch: network-first for API, cache-first for static
-self.addEventListener("fetch", (event: FetchEvent) => {
+sw.addEventListener("fetch", (event: FetchEvent) => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // Skip non-GET and chrome-extension requests
   if (request.method !== "GET") return;
   if (url.protocol !== "http:" && url.protocol !== "https:") return;
 
-  // API calls: network-first with cache fallback
   if (url.pathname.startsWith("/api/")) {
     event.respondWith(
       fetch(request)
@@ -50,72 +63,84 @@ self.addEventListener("fetch", (event: FetchEvent) => {
           if (response.ok) {
             const clone = response.clone();
             caches.open(CACHE_NAME).then((cache) => {
-              cache.put(request, clone);
+              cache.put(request, clone).catch(() => {});
             });
           }
           return response;
         })
-        .catch(() => caches.match(request).then((r) => r || new Response("Offline", { status: 503 })))
+        .catch(async () => {
+          const cached = await caches.match(request);
+          if (cached) return cached;
+          return new Response("Offline", { status: 503 });
+        })
     );
     return;
   }
 
-  // Static assets & pages: cache-first, network fallback
   event.respondWith(
     caches.match(request).then((cached) => {
       if (cached) return cached;
-      return fetch(request).then((response) => {
-        if (response.ok) {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(request, clone);
-          });
-        }
-        return response;
-      }).catch(() => {
-        // Offline page fallback for navigation requests
-        if (request.mode === "navigate") {
-          return caches.match("/dashboard") || new Response(
-            `<!DOCTYPE html><html><head><meta charset="utf-8"><title>TeamMamba — Offline</title>
-            <style>body{font-family:system-ui;background:#0f0f11;color:#fff;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
-            .msg{text-align:center}h1{font-size:2rem;margin-bottom:0.5rem}p{color:#999}</style></head>
-            <body><div class="msg"><h1>📡 You're Offline</h1><p>Check your internet connection and try again.</p></div></body></html>`,
-            { headers: { "Content-Type": "text/html" }, status: 503 }
-          );
-        }
-        return new Response("Offline", { status: 503 });
-      });
+      return fetch(request)
+        .then((response) => {
+          if (response.ok) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => {
+              cache.put(request, clone).catch(() => {});
+            });
+          }
+          return response;
+        })
+        .catch(async () => {
+          if (request.mode === "navigate") {
+            const dashboard = await caches.match("/dashboard");
+            if (dashboard) return dashboard;
+            return new Response(
+              "<!DOCTYPE html><html><head><meta charset='utf-8'><title>TeamMamba — Offline</title></head><body><h1>Offline</h1><p>Reconnect and try again.</p></body></html>",
+              { headers: { "Content-Type": "text/html" }, status: 503 }
+            );
+          }
+          return new Response("Offline", { status: 503 });
+        });
     })
   );
 });
 
-// Background sync for offline mutations
-self.addEventListener("sync", (event: SyncEvent) => {
-  if (event.tag === "sync-mutations") {
-    event.waitUntil(syncMutations());
-  }
+sw.addEventListener("sync", (event: Event) => {
+  const syncEvent = event as SyncEventLike;
+  if (syncEvent.tag !== "sync-mutations") return;
+  syncEvent.waitUntil(syncMutations());
 });
+
+function requestToPromise<T>(request: IDBRequest<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
 
 async function syncMutations() {
   const db = await openOfflineDB();
-  const tx = db.transaction("mutations", "readonly");
-  const store = tx.objectStore("mutations");
-  const mutations = await store.getAll();
+  try {
+    const tx = db.transaction("mutations", "readonly");
+    const store = tx.objectStore("mutations");
+    const mutations = (await requestToPromise(store.getAll())) as MutationRecord[];
 
-  for (const mutation of mutations) {
-    try {
-      await fetch(mutation.url, {
-        method: mutation.method,
-        headers: mutation.headers,
-        body: mutation.body,
-      });
-      // Remove successful mutation
-      const deleteTx = db.transaction("mutations", "readwrite");
-      deleteTx.objectStore("mutations").delete(mutation.id);
-    } catch {
-      // Will retry on next sync
-      break;
+    for (const mutation of mutations) {
+      try {
+        await fetch(mutation.url, {
+          method: mutation.method,
+          headers: mutation.headers,
+          body: mutation.body,
+        });
+
+        const deleteTx = db.transaction("mutations", "readwrite");
+        deleteTx.objectStore("mutations").delete(mutation.id);
+      } catch {
+        break;
+      }
     }
+  } finally {
+    db.close();
   }
 }
 
@@ -133,29 +158,31 @@ function openOfflineDB(): Promise<IDBDatabase> {
   });
 }
 
-// Push notifications
-self.addEventListener("push", (event: PushEvent) => {
-  const data = event.data?.json() ?? { title: "TeamMamba", body: "New notification" };
+sw.addEventListener("push", (event: PushEvent) => {
+  const payload = (event.data?.json() as PushPayload | null) ?? {};
   event.waitUntil(
-    self.registration.showNotification(data.title, {
-      body: data.body,
+    sw.registration.showNotification(payload.title ?? "TeamMamba", {
+      body: payload.body ?? "New notification",
       icon: "/icon-192.png",
       badge: "/icon-192.png",
-      data: data.data,
-      vibrate: [100, 50, 100],
-      actions: data.actions,
+      data: payload.data,
     })
   );
 });
 
-self.addEventListener("notificationclick", (event: NotificationEvent) => {
+sw.addEventListener("notificationclick", (event: NotificationEvent) => {
   event.notification.close();
-  const url = event.notification.data?.url ?? "/dashboard";
+  const targetUrl = event.notification.data?.url ?? "/dashboard";
+
   event.waitUntil(
-    self.clients.matchAll({ type: "window" }).then((clients) => {
-      const existing = clients.find((c) => c.url.includes(url));
-      if (existing) return existing.focus();
-      return self.clients.openWindow(url);
+    sw.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+      const existing = clients.find((client) => "url" in client && client.url.includes(targetUrl));
+      if (existing && "focus" in existing) {
+        return (existing as WindowClient).focus();
+      }
+      return sw.clients.openWindow(targetUrl);
     })
   );
 });
+
+export {};

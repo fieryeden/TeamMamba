@@ -16,7 +16,15 @@ interface Integration {
   type: string;
   config: Record<string, unknown>;
   enabled: boolean;
-  boardId?: string;
+  boardId?: string | null;
+  createdAt: string;
+}
+
+interface IntegrationLogEntry {
+  id: string;
+  action: string;
+  success: boolean;
+  result: unknown;
   createdAt: string;
 }
 
@@ -46,6 +54,17 @@ export function IntegrationsClient() {
   const [configValues, setConfigValues] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [expandedIntegrationId, setExpandedIntegrationId] = useState<string | null>(null);
+  const [logsByIntegration, setLogsByIntegration] = useState<Record<string, IntegrationLogEntry[]>>({});
+  const [logLoadingByIntegration, setLogLoadingByIntegration] = useState<Record<string, boolean>>({});
+  const [testResultByIntegration, setTestResultByIntegration] = useState<Record<string, { success: boolean; message: string }>>({});
+  const [runResultByIntegration, setRunResultByIntegration] = useState<Record<string, { success: boolean; message: string }>>({});
+  const [testingIntegrationId, setTestingIntegrationId] = useState<string | null>(null);
+  const [runningIntegrationId, setRunningIntegrationId] = useState<string | null>(null);
+  const [showRunDialog, setShowRunDialog] = useState(false);
+  const [runItemId, setRunItemId] = useState("");
+  const [runIntegrationId, setRunIntegrationId] = useState<string | null>(null);
+  const [runItems, setRunItems] = useState<Array<{ id: string; name: string }>>([]);
 
   useEffect(() => {
     fetch("/api/integrations")
@@ -96,6 +115,91 @@ export function IntegrationsClient() {
     setIntegrations((prev) => prev.filter((i) => i.id !== id));
   };
 
+  const loadLogs = async (id: string) => {
+    setLogLoadingByIntegration((prev) => ({ ...prev, [id]: true }));
+    try {
+      const res = await fetch(`/api/integrations/${id}/logs?limit=5`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setLogsByIntegration((prev) => ({ ...prev, [id]: data.logs ?? [] }));
+    } finally {
+      setLogLoadingByIntegration((prev) => ({ ...prev, [id]: false }));
+    }
+  };
+
+  const handleTest = async (id: string) => {
+    setTestingIntegrationId(id);
+    try {
+      const res = await fetch(`/api/integrations/${id}/test`, { method: "POST" });
+      const data = await res.json();
+      setTestResultByIntegration((prev) => ({
+        ...prev,
+        [id]: {
+          success: Boolean(data.success),
+          message: typeof data.message === "string" ? data.message : data.error ?? "Test failed",
+        },
+      }));
+      await loadLogs(id);
+    } catch {
+      setTestResultByIntegration((prev) => ({
+        ...prev,
+        [id]: { success: false, message: "Test failed" },
+      }));
+    } finally {
+      setTestingIntegrationId(null);
+    }
+  };
+
+  const openRunDialog = async (integration: Integration) => {
+    setRunIntegrationId(integration.id);
+    setRunItemId("");
+    setRunItems([]);
+
+    if (integration.boardId) {
+      try {
+        const res = await fetch(`/api/items?boardId=${integration.boardId}`);
+        if (res.ok) {
+          const data = await res.json();
+          setRunItems((data.items ?? []).map((item: { id: string; name: string }) => ({ id: item.id, name: item.name })));
+        }
+      } catch {
+        setRunItems([]);
+      }
+    }
+
+    setShowRunDialog(true);
+  };
+
+  const handleRun = async () => {
+    if (!runIntegrationId || !runItemId) return;
+    setRunningIntegrationId(runIntegrationId);
+    try {
+      const res = await fetch(`/api/integrations/${runIntegrationId}/execute`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ itemId: runItemId }),
+      });
+      const data = await res.json();
+      setRunResultByIntegration((prev) => ({
+        ...prev,
+        [runIntegrationId]: {
+          success: Boolean(data.success),
+          message: data.success ? "Integration executed successfully" : data.error ?? "Integration execution failed",
+        },
+      }));
+      await loadLogs(runIntegrationId);
+      setShowRunDialog(false);
+      setRunItemId("");
+    } catch {
+      setRunResultByIntegration((prev) => ({
+        ...prev,
+        [runIntegrationId]: { success: false, message: "Integration execution failed" },
+      }));
+    } finally {
+      setRunningIntegrationId(null);
+    }
+  };
+
   const catalogEntry = INTEGRATION_CATALOG.find((c) => c.type === selectedType);
 
   return (
@@ -110,7 +214,6 @@ export function IntegrationsClient() {
         </Button>
       </div>
 
-      {/* Active integrations */}
       <div>
         <h2 className="mb-3 text-lg font-semibold">Active Integrations</h2>
         {loading ? (
@@ -123,28 +226,116 @@ export function IntegrationsClient() {
           <div className="space-y-2">
             {integrations.map((integration) => {
               const catalog = INTEGRATION_CATALOG.find((c) => c.type === integration.type);
+              const testResult = testResultByIntegration[integration.id];
+              const runResult = runResultByIntegration[integration.id];
+              const logs = logsByIntegration[integration.id] ?? [];
+              const isExpanded = expandedIntegrationId === integration.id;
+
               return (
-                <div key={integration.id} className="flex items-center justify-between rounded-lg border bg-card px-4 py-3">
-                  <div className="flex items-center gap-3">
-                    <span className="text-xl">{catalog?.icon ?? "🔗"}</span>
-                    <div>
-                      <div className="text-sm font-medium">{catalog?.name ?? integration.type}</div>
-                      <div className="text-xs text-muted-foreground">
-                        {integration.enabled ? "Enabled" : "Disabled"} · Added {new Date(integration.createdAt).toLocaleDateString()}
+                <div key={integration.id} className="rounded-lg border bg-card px-4 py-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <span className="text-xl">{catalog?.icon ?? "🔗"}</span>
+                      <div>
+                        <div className="text-sm font-medium">{catalog?.name ?? integration.type}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {integration.enabled ? "Enabled" : "Disabled"} · Added {new Date(integration.createdAt).toLocaleDateString()}
+                        </div>
                       </div>
                     </div>
+                    <div className="flex items-center gap-2">
+                      {integration.enabled && (
+                        <>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleTest(integration.id)}
+                            disabled={testingIntegrationId === integration.id}
+                          >
+                            {testingIntegrationId === integration.id ? "Testing..." : "Test Connection"}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => openRunDialog(integration)}
+                            disabled={runningIntegrationId === integration.id}
+                          >
+                            {runningIntegrationId === integration.id ? "Running..." : "Run Now"}
+                          </Button>
+                        </>
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          if (isExpanded) {
+                            setExpandedIntegrationId(null);
+                            return;
+                          }
+                          setExpandedIntegrationId(integration.id);
+                          loadLogs(integration.id);
+                        }}
+                      >
+                        {isExpanded ? "Hide Details" : "Details"}
+                      </Button>
+                      <button
+                        className={`relative h-5 w-9 rounded-full transition-colors ${integration.enabled ? "bg-mamba-600" : "bg-muted"}`}
+                        onClick={() => handleToggle(integration.id, integration.enabled)}
+                      >
+                        <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${integration.enabled ? "left-4" : "left-0.5"}`} />
+                      </button>
+                      <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => handleDelete(integration.id)}>
+                        Remove
+                      </Button>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      className={`relative h-5 w-9 rounded-full transition-colors ${integration.enabled ? "bg-mamba-600" : "bg-muted"}`}
-                      onClick={() => handleToggle(integration.id, integration.enabled)}
-                    >
-                      <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${integration.enabled ? "left-4" : "left-0.5"}`} />
-                    </button>
-                    <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => handleDelete(integration.id)}>
-                      Remove
-                    </Button>
-                  </div>
+
+                  {(testResult || runResult) && (
+                    <div className="mt-2 space-y-1">
+                      {testResult && (
+                        <p className={`text-xs ${testResult.success ? "text-green-600" : "text-destructive"}`}>
+                          Test: {testResult.message}
+                        </p>
+                      )}
+                      {runResult && (
+                        <p className={`text-xs ${runResult.success ? "text-green-600" : "text-destructive"}`}>
+                          Run: {runResult.message}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {isExpanded && (
+                    <div className="mt-3 rounded-md border bg-muted/20 p-3">
+                      <div className="mb-2 flex items-center justify-between">
+                        <p className="text-xs font-semibold">Recent Logs</p>
+                        <Button variant="ghost" size="sm" className="h-6 px-2 text-[11px]" onClick={() => loadLogs(integration.id)}>
+                          Refresh
+                        </Button>
+                      </div>
+                      {logLoadingByIntegration[integration.id] ? (
+                        <p className="text-xs text-muted-foreground">Loading logs...</p>
+                      ) : logs.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">No logs yet.</p>
+                      ) : (
+                        <div className="space-y-1">
+                          {logs.map((entry) => (
+                            <div key={entry.id} className="rounded border bg-background px-2 py-1.5 text-xs">
+                              <div className="flex items-center justify-between">
+                                <span className={`font-medium ${entry.success ? "text-green-600" : "text-destructive"}`}>
+                                  {entry.action} · {entry.success ? "Success" : "Failed"}
+                                </span>
+                                <span className="text-muted-foreground">{new Date(entry.createdAt).toLocaleString()}</span>
+                              </div>
+                              {entry.result !== null && entry.result !== undefined && (
+                                <p className="mt-1 line-clamp-2 text-muted-foreground">{JSON.stringify(entry.result)}</p>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -152,7 +343,6 @@ export function IntegrationsClient() {
         )}
       </div>
 
-      {/* Catalog */}
       <div>
         <h2 className="mb-3 text-lg font-semibold">Integration Catalog</h2>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
@@ -176,7 +366,6 @@ export function IntegrationsClient() {
         </div>
       </div>
 
-      {/* Add dialog */}
       <Dialog open={showAdd} onOpenChange={(open) => { if (!open) { setShowAdd(false); setSelectedType(null); } }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
@@ -219,6 +408,41 @@ export function IntegrationsClient() {
                 {saving ? "Saving..." : "Add Integration"}
               </Button>
             )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showRunDialog} onOpenChange={setShowRunDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Run Integration</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <label className="block text-sm font-medium">Item</label>
+            {runItems.length > 0 ? (
+              <select
+                className="w-full rounded-lg border bg-transparent px-3 py-2 text-sm"
+                value={runItemId}
+                onChange={(event) => setRunItemId(event.target.value)}
+              >
+                <option value="">Select item</option>
+                {runItems.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <Input
+                placeholder="Enter item ID"
+                value={runItemId}
+                onChange={(event) => setRunItemId(event.target.value)}
+              />
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setShowRunDialog(false)}>Cancel</Button>
+            <Button disabled={!runItemId || !runIntegrationId} onClick={handleRun}>Execute</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

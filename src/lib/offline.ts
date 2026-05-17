@@ -2,6 +2,12 @@
 
 import { useState, useEffect } from "react";
 
+interface ServiceWorkerRegistrationWithSync extends ServiceWorkerRegistration {
+  sync: {
+    register: (tag: string) => Promise<void>;
+  };
+}
+
 export function useOffline() {
   const [isOnline, setIsOnline] = useState(true);
   const [pendingMutations, setPendingMutations] = useState(0);
@@ -60,8 +66,10 @@ export async function queueMutation(mutation: {
 
     // Register for background sync if available
     if ("serviceWorker" in navigator && "SyncManager" in window) {
-      const reg = await navigator.serviceWorker.ready;
-      await reg.sync.register("sync-mutations");
+      const reg = (await navigator.serviceWorker.ready) as ServiceWorkerRegistrationWithSync;
+      if (reg.sync?.register) {
+        await reg.sync.register("sync-mutations");
+      }
     }
   } catch {
     // Fallback: just try the request directly

@@ -118,7 +118,7 @@ export const createAutomationSchema = z.object({
     "CHANGE_STATUS", "MOVE_ITEM_TO_GROUP", "NOTIFY_ASSIGNEE",
     "NOTIFY_USER", "SET_COLUMN_VALUE", "CREATE_ITEM",
     "SEND_EMAIL", "ASSIGN_USER", "SHIFT_DATE",
-    "SEND_NOTIFICATION", "UPDATE_COLUMN", "ADD_TAG",
+    "SEND_NOTIFICATION", "UPDATE_COLUMN", "ADD_TAG", "TRIGGER_INTEGRATION",
   ]),
   actionConfig: z.record(z.unknown()).optional(),
 });

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { FileText, Plus, Trash2, Pin, Search, MoreVertical } from "lucide-react";
+import { FileText, Plus, Trash2, Pin, Search, MoreVertical, RefreshCw } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,6 +33,22 @@ type DocEmbed = {
   createdAt: string;
 };
 
+type EmbedDataResponse = {
+  board: {
+    name: string;
+    columns: Array<{ id: string; title: string; columnType: string }>;
+  };
+  groups: Array<{
+    id: string;
+    name: string;
+    items: Array<{
+      id: string;
+      name: string;
+      columnValues: Array<{ columnId: string; value: unknown }>;
+    }>;
+  }>;
+};
+
 const DOC_ICONS = ["📄", "📝", "📋", "📌", "💡", "🎯", "📊", "🗓️", "🔧", "🎨", "🚀", "📦"];
 
 interface DocsClientProps {
@@ -57,7 +73,6 @@ export function DocsClient({ workspaces }: DocsClientProps) {
   const [embedBoardId, setEmbedBoardId] = useState("");
   const [embedGroupId, setEmbedGroupId] = useState("");
   const [embedItemId, setEmbedItemId] = useState("");
-  const [embedPreviewById, setEmbedPreviewById] = useState<Record<string, { title: string; rows: string[] }>>({});
 
   const loadDocs = useCallback(async () => {
     setLoading(true);
@@ -365,9 +380,11 @@ export function DocsClient({ workspaces }: DocsClientProps) {
                         </Button>
                       </div>
                       <div className="rounded-md border bg-background px-3 py-2 text-xs text-muted-foreground">
-                        Preview: board iframe-like snapshot
-                        {embed.embedData?.groupId ? ` · Group ${embed.embedData.groupId}` : ""}
-                        {embed.embedData?.itemId ? ` · Item ${embed.embedData.itemId}` : ""}
+                        {activeDoc ? (
+                          <EmbedLivePreview docId={activeDoc.id} embed={embed} />
+                        ) : (
+                          "Loading preview..."
+                        )}
                       </div>
                     </div>
                   ))}
@@ -500,6 +517,127 @@ export function DocsClient({ workspaces }: DocsClientProps) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+function valueToDisplay(value: unknown): string {
+  if (value === null || value === undefined) return "—";
+  if (Array.isArray(value)) return value.map((entry) => valueToDisplay(entry)).join(", ");
+  if (typeof value === "object") {
+    const entry = value as Record<string, unknown>;
+    if (typeof entry.label === "string") return entry.label;
+    if (typeof entry.name === "string") return entry.name;
+    return JSON.stringify(value);
+  }
+  return String(value);
+}
+
+function formatCellValue(columnType: string, value: unknown) {
+  if (columnType === "DATE" && typeof value === "string") {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) return parsed.toLocaleDateString();
+  }
+  return valueToDisplay(value);
+}
+
+function EmbedLivePreview({ docId, embed }: { docId: string; embed: DocEmbed }) {
+  const [data, setData] = useState<EmbedDataResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadPreview = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/docs/${docId}/embeds/${embed.id}/data`);
+      if (!res.ok) {
+        setError("Preview unavailable");
+        return;
+      }
+      const json = (await res.json()) as EmbedDataResponse;
+      setData(json);
+    } catch {
+      setError("Preview unavailable");
+    } finally {
+      setLoading(false);
+    }
+  }, [docId, embed.id]);
+
+  useEffect(() => {
+    loadPreview();
+  }, [loadPreview]);
+
+  if (loading) {
+    return <div className="animate-pulse rounded bg-muted/60 px-2 py-3 text-xs text-muted-foreground">Loading live data...</div>;
+  }
+
+  if (error || !data) {
+    return <div className="text-xs text-destructive">{error ?? "Preview unavailable"}</div>;
+  }
+
+  const items = data.groups.flatMap((group) => group.items);
+  const columnMap = new Map(data.board.columns.map((column) => [column.id, column]));
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <p className="text-[11px] font-medium text-foreground">{data.board.name}</p>
+        <div className="flex items-center gap-2">
+          <Badge variant="secondary" className="h-5 px-2 text-[10px]">
+            {items.length} items
+          </Badge>
+          <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px]" onClick={loadPreview}>
+            <RefreshCw className="mr-1 h-3 w-3" /> Refresh
+          </Button>
+        </div>
+      </div>
+      <div className="max-h-56 overflow-auto rounded border">
+        <table className="w-full min-w-[480px] border-collapse text-[11px]">
+          <thead className="sticky top-0 bg-muted/50">
+            <tr>
+              <th className="border-b px-2 py-1 text-left font-semibold">Item</th>
+              {data.board.columns.map((column) => (
+                <th key={column.id} className="border-b px-2 py-1 text-left font-semibold">
+                  {column.title}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item) => (
+              <tr key={item.id} className="border-b last:border-b-0">
+                <td className="px-2 py-1.5 font-medium">{item.name}</td>
+                {data.board.columns.map((column) => {
+                  const value = item.columnValues.find((entry) => entry.columnId === column.id)?.value;
+                  const text = formatCellValue(column.columnType, value);
+                  if (column.columnType === "STATUS") {
+                    return (
+                      <td key={`${item.id}-${column.id}`} className="px-2 py-1.5">
+                        <span className="inline-flex rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-medium text-blue-700">
+                          {text}
+                        </span>
+                      </td>
+                    );
+                  }
+                  return (
+                    <td key={`${item.id}-${column.id}`} className="max-w-[220px] truncate px-2 py-1.5 text-muted-foreground">
+                      {text}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+            {items.length === 0 && (
+              <tr>
+                <td colSpan={columnMap.size + 1} className="px-2 py-3 text-center text-muted-foreground">
+                  No items match this embed filter.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

@@ -32,11 +32,19 @@ export async function GET(
 
     const { searchParams } = new URL(req.url);
     const itemId = searchParams.get("itemId");
+    const itemForFilter = itemId
+      ? await prisma.item.findUnique({
+          where: { id: itemId },
+          select: { id: true, boardId: true, groupId: true },
+        })
+      : null;
+    if (itemForFilter && itemForFilter.boardId !== boardId) {
+      return NextResponse.json({ error: "Invalid item for board" }, { status: 400 });
+    }
 
-    const embeds = await prisma.docEmbed.findMany({
+    const rawEmbeds = await prisma.docEmbed.findMany({
       where: {
         boardId,
-        ...(itemId ? { itemId } : {}),
       },
       include: {
         doc: {
@@ -54,6 +62,19 @@ export async function GET(
       },
       orderBy: { createdAt: "desc" },
     });
+
+    const embeds = !itemForFilter
+      ? rawEmbeds
+      : rawEmbeds.filter((embed) => {
+          if (embed.itemId === itemForFilter.id) return true;
+          if (embed.itemId) return false;
+          const embedData = embed.embedData && typeof embed.embedData === "object"
+            ? (embed.embedData as Record<string, unknown>)
+            : {};
+          if (typeof embedData.itemId === "string") return embedData.itemId === itemForFilter.id;
+          if (typeof embedData.groupId === "string") return embedData.groupId === itemForFilter.groupId;
+          return true;
+        });
 
     return NextResponse.json({ embeds });
   } catch (err) {

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./../styles/globals.css";
 import { ThemeProvider } from "@/components/providers/theme-provider";
 import { OfflineIndicator } from "@/components/pwa/offline-indicator";
+import { InstallPrompt } from "@/components/pwa/install-prompt";
 import { I18nProvider } from "@/lib/i18n/provider";
 
 export const metadata: Metadata = {
@@ -30,6 +31,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="min-h-screen bg-background font-sans antialiased">
         <ThemeProvider><I18nProvider>{children}</I18nProvider></ThemeProvider>
         <OfflineIndicator />
+        <InstallPrompt />
       </body>
     </html>
   );

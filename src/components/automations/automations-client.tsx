@@ -49,6 +49,7 @@ const ACTION_OPTIONS = [
   { value: "create_item", label: "Create item" },
   { value: "update_column", label: "Update column value" },
   { value: "add_tag", label: "Add tag" },
+  { value: "trigger_integration", label: "Trigger integration" },
 ];
 
 const RECIPES = [
@@ -486,6 +487,13 @@ export function AutomationsClient({ automations: initialAutomations }: { automat
                         placeholder="Tag name"
                         value={step.config.tag ?? ""}
                         onChange={(e) => updateAction(idx, "tag", e.target.value)}
+                      />
+                    )}
+                    {step.action === "trigger_integration" && (
+                      <Input
+                        placeholder="Integration ID"
+                        value={step.config.integrationId ?? ""}
+                        onChange={(e) => updateAction(idx, "integrationId", e.target.value)}
                       />
                     )}
                   </div>

@@ -51,6 +51,7 @@ model User {
   itemVersions       ItemVersion[]     @relation("ItemVersionUser")
   docEmbeds          DocEmbed[]        @relation("DocEmbedCreator")
   integrationConfigs IntegrationConfig[] @relation("IntegrationConfigCreator")
+  pushSubscriptions  PushSubscription[]
 
   @@map("users")
 }
@@ -509,6 +510,7 @@ enum AutomationAction {
   ASSIGN_USER
   ADD_TAG
   SHIFT_DATE
+  TRIGGER_INTEGRATION
 }
 
 // ─── VIEWS ──────────────────────────────────────────────
@@ -748,6 +750,33 @@ model IntegrationConfig {
   createdAt   DateTime @default(now())
   createdBy   User     @relation("IntegrationConfigCreator", fields: [createdById], references: [id], onDelete: Cascade)
   board       Board?   @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  logs        IntegrationLog[]
 
   @@map("integration_configs")
+}
+
+model IntegrationLog {
+  id            String            @id @default(uuid())
+  integrationId String
+  integration   IntegrationConfig @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  action        String
+  success       Boolean
+  result        Json?
+  createdAt     DateTime          @default(now())
+
+  @@map("integration_logs")
+}
+
+model PushSubscription {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoint  String
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, endpoint])
+  @@map("push_subscriptions")
 }

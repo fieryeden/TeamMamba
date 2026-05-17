@@ -1,5 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/mailer";
+import { runIntegration } from "@/lib/integration-runners";
+import { Prisma } from "@prisma/client";
 
 type AutomationEvent =
   | "ITEM_CREATED"
@@ -45,8 +47,23 @@ type RuleAction = {
     | "send_email"
     | "create_item"
     | "update_column"
-    | "add_tag";
+    | "add_tag"
+    | "trigger_integration";
   config?: Record<string, unknown>;
+};
+
+type AutomationExecutionItem = {
+  id: string;
+  boardId: string;
+  groupId: string;
+  name: string;
+  assignees: Array<{ userId: string; firstName: string | null; lastName: string | null }>;
+  columnValues: Array<{
+    id: string;
+    columnId: string;
+    value: unknown;
+    column: { title: string; columnType: string };
+  }>;
 };
 
 function getByPath(source: unknown, path: string): unknown {
@@ -129,7 +146,6 @@ function toRuleConditions(raw: unknown): { logic: "AND" | "OR"; conditions: Rule
       };
     }
 
-    // Legacy key/value conditions support
     const legacyConditions: RuleCondition[] = Object.entries(obj).map(([key, value]) => {
       if (value && typeof value === "object" && !Array.isArray(value)) {
         const entry = value as Record<string, unknown>;
@@ -167,7 +183,7 @@ async function upsertColumnValue(itemId: string, columnId: string, value: unknow
     where: { itemId, columnId },
     select: { id: true },
   });
-  const serialized = JSON.parse(JSON.stringify(value ?? null)) as any;
+  const serialized = JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput;
   if (existing) {
     await prisma.columnValue.update({ where: { id: existing.id }, data: { value: serialized } });
     return;
@@ -185,7 +201,99 @@ function normalizeActionName(action: string): RuleAction["action"] | null {
   if (value === "CREATE_ITEM") return "create_item";
   if (value === "SET_COLUMN_VALUE" || value === "UPDATE_COLUMN") return "update_column";
   if (value === "ADD_TAG") return "add_tag";
+  if (value === "TRIGGER_INTEGRATION") return "trigger_integration";
   return null;
+}
+
+async function resolveIntegrationConfig(
+  config: Record<string, unknown>,
+  boardId: string,
+  createdById: string
+) {
+  const integrationId = typeof config.integrationId === "string" ? config.integrationId : null;
+  const integrationType = typeof config.integrationType === "string" ? config.integrationType : null;
+
+  if (integrationId) {
+    return prisma.integrationConfig.findFirst({
+      where: {
+        id: integrationId,
+        enabled: true,
+        createdById,
+        OR: [{ boardId }, { boardId: null }],
+      },
+    });
+  }
+
+  if (integrationType) {
+    return prisma.integrationConfig.findFirst({
+      where: {
+        type: integrationType,
+        enabled: true,
+        createdById,
+        OR: [{ boardId }, { boardId: null }],
+      },
+      orderBy: { createdAt: "desc" },
+    });
+  }
+
+  return null;
+}
+
+async function runAutomationIntegration(
+  integration: { id: string; type: string; config: unknown; enabled: boolean; boardId: string | null },
+  item: AutomationExecutionItem,
+  config: Record<string, unknown>
+) {
+  let success = false;
+  let result: unknown = null;
+
+  try {
+    const response = await runIntegration(
+      {
+        id: integration.id,
+        type: integration.type,
+        config: integration.config,
+        enabled: integration.enabled,
+        boardId: integration.boardId,
+      },
+      {
+        action: "AUTOMATION",
+        item: {
+          id: item.id,
+          boardId: item.boardId,
+          name: item.name,
+          columnValues: item.columnValues.map((entry) => ({
+            columnId: entry.columnId,
+            columnTitle: entry.column.title,
+            columnType: entry.column.columnType,
+            value: entry.value,
+          })),
+          assignees: item.assignees.map((entry) => ({
+            userId: entry.userId,
+            firstName: entry.firstName,
+            lastName: entry.lastName,
+          })),
+        },
+        itemUrl: `/board/${item.boardId}`,
+        messageOverride: typeof config.body === "string" ? config.body : undefined,
+      }
+    );
+
+    success = response.ok;
+    result = response;
+  } catch (err) {
+    success = false;
+    result = { error: err instanceof Error ? err.message : "Integration execution failed" };
+  }
+
+  await prisma.integrationLog.create({
+    data: {
+      integrationId: integration.id,
+      action: "AUTOMATION",
+      success,
+      result: JSON.parse(JSON.stringify(result ?? null)),
+    },
+  });
 }
 
 function getActionsForAutomation(automation: {
@@ -194,18 +302,18 @@ function getActionsForAutomation(automation: {
 }): RuleAction[] {
   const config = (automation.actionConfig as Record<string, unknown> | null) ?? {};
   if (Array.isArray(config.actions)) {
-const steps: RuleAction[] = config.actions
- .map((entry): RuleAction | null => {
- if (!entry || typeof entry !== "object") return null;
- const raw = entry as Record<string, unknown>;
- const normalized = typeof raw.action === "string" ? normalizeActionName(raw.action) : null;
- if (!normalized) return null;
- return {
- action: normalized,
- config: (raw.config && typeof raw.config === "object" ? raw.config : raw) as Record<string, unknown>,
- };
- })
- .filter((entry): entry is RuleAction => entry !== null);
+    const steps: RuleAction[] = config.actions
+      .map((entry): RuleAction | null => {
+        if (!entry || typeof entry !== "object") return null;
+        const raw = entry as Record<string, unknown>;
+        const normalized = typeof raw.action === "string" ? normalizeActionName(raw.action) : null;
+        if (!normalized) return null;
+        return {
+          action: normalized,
+          config: (raw.config && typeof raw.config === "object" ? raw.config : raw) as Record<string, unknown>,
+        };
+      })
+      .filter((entry): entry is RuleAction => entry !== null);
     if (steps.length) return steps;
   }
 
@@ -216,15 +324,9 @@ const steps: RuleAction[] = config.actions
 
 async function executeRuleAction(
   automationName: string,
+  automationUserId: string,
   action: RuleAction,
-  item: {
-    id: string;
-    boardId: string;
-    groupId: string;
-    name: string;
-    assignees: Array<{ userId: string }>;
-    columnValues: Array<{ id: string; columnId: string; value: unknown }>;
-  }
+  item: AutomationExecutionItem
 ) {
   const config = action.config ?? {};
 
@@ -275,6 +377,22 @@ async function executeRuleAction(
     }
 
     case "send_notification": {
+      const externalIntegration =
+        (await resolveIntegrationConfig(config, item.boardId, automationUserId))
+        ?? (await prisma.integrationConfig.findFirst({
+          where: {
+            createdById: automationUserId,
+            enabled: true,
+            type: { in: ["slack", "microsoft_teams"] },
+            OR: [{ boardId: item.boardId }, { boardId: null }],
+          },
+          orderBy: { createdAt: "desc" },
+        }));
+      if (externalIntegration && (externalIntegration.type === "slack" || externalIntegration.type === "microsoft_teams")) {
+        await runAutomationIntegration(externalIntegration, item, config);
+        return;
+      }
+
       const configuredUserIds = Array.isArray(config.userIds)
         ? config.userIds.filter((value): value is string => typeof value === "string")
         : typeof config.userId === "string"
@@ -350,6 +468,13 @@ async function executeRuleAction(
       await upsertColumnValue(item.id, columnId, next);
       return;
     }
+
+    case "trigger_integration": {
+      const integration = await resolveIntegrationConfig(config, item.boardId, automationUserId);
+      if (!integration) return;
+      await runAutomationIntegration(integration, item, config);
+      return;
+    }
   }
 }
 
@@ -382,8 +507,12 @@ export async function processAutomation(boardId: string, event: AutomationEvent,
   const dbItem = await prisma.item.findUnique({
     where: { id: item.id },
     include: {
-      assignees: { select: { userId: true } },
-      columnValues: { select: { id: true, columnId: true, value: true } },
+      assignees: {
+        select: { userId: true, user: { select: { firstName: true, lastName: true } } },
+      },
+      columnValues: {
+        select: { id: true, columnId: true, value: true, column: { select: { title: true, columnType: true } } },
+      },
     },
   });
   if (!dbItem) return;
@@ -404,12 +533,16 @@ export async function processAutomation(boardId: string, event: AutomationEvent,
 
     const actions = getActionsForAutomation(automation);
     for (const action of actions) {
-      await executeRuleAction(automation.name, action, {
+      await executeRuleAction(automation.name, automation.userId, action, {
         id: dbItem.id,
         boardId: dbItem.boardId,
         groupId: dbItem.groupId,
         name: dbItem.name,
-        assignees: dbItem.assignees,
+        assignees: dbItem.assignees.map((entry) => ({
+          userId: entry.userId,
+          firstName: entry.user.firstName,
+          lastName: entry.user.lastName,
+        })),
         columnValues: dbItem.columnValues,
       });
     }
@@ -436,4 +569,3 @@ export async function processAutomation(boardId: string, event: AutomationEvent,
     });
   }
 }
-
