@@ -7,6 +7,7 @@ import { sendEmail } from "@/lib/mailer";
 import { broadcastToBoard } from "@/lib/socket";
 import { processAutomation } from "@/lib/automation-engine";
 import { recomputeDerivedColumnsForTargetItem } from "@/lib/connect-columns";
+import { canEditColumn } from "@/lib/column-permissions";
 
 export async function PATCH(
   req: NextRequest,

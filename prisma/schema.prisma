@@ -150,6 +150,8 @@ model Board {
   webhooks    Webhook[]
   connectLinks ConnectColumn[] @relation("ConnectTargetBoard")
   integrationConfigs IntegrationConfig[]
+  columnPermissions ColumnPermission[]
+  emailAddress BoardEmailAddress?
 
   auditLogs   AuditLog[]
   @@map("boards")
@@ -199,8 +201,25 @@ model BoardColumn {
   board      Board      @relation(fields: [boardId], references: [id], onDelete: Cascade)
   values     ColumnValue[]
   connectLinks ConnectColumn[]
+  permissions ColumnPermission[]
 
   @@map("board_columns")
+}
+
+model ColumnPermission {
+  id        String    @id @default(uuid())
+  columnId  String
+  boardId   String
+  role      BoardRole
+  canView   Boolean   @default(true)
+  canEdit   Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  column    BoardColumn @relation(fields: [columnId], references: [id], onDelete: Cascade)
+  board     Board       @relation(fields: [boardId], references: [id], onDelete: Cascade)
+
+  @@unique([columnId, role])
+  @@map("column_permissions")
 }
 
 enum ColumnType {
@@ -285,6 +304,21 @@ model Item {
   connectTargetLinks ConnectColumn[] @relation("ConnectTarget")
 
   @@map("items")
+}
+
+model BoardEmailAddress {
+  id             String   @id @default(uuid())
+  boardId         String   @unique
+  address         String   @unique
+  secret          String
+  isEnabled       Boolean  @default(true)
+  defaultGroupId  String?
+  defaultStatus   String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  board           Board    @relation(fields: [boardId], references: [id], onDelete: Cascade)
+
+  @@map("board_email_addresses")
 }
 
 model ConnectColumn {

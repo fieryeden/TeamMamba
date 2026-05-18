@@ -1,22 +1,79 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getAuthUser } from "@/lib/session";
+import { chatJSON } from "@/lib/llm";
+import { buildBoardContext } from "@/lib/ai-utils";
 
-/**
- * POST /api/ai/generate-items
- * Generate multiple items from a natural language description.
- * Body: { boardId, description, groupId? }
- *
- * Parses the description to extract item names and creates them.
- * Supports patterns like "Create items: A, B, C" or numbered lists.
- */
+interface GeneratedItemDraft {
+  name: string;
+  priority?: string;
+  groupId?: string;
+}
+
+function heuristicParseItems(description: string): string[] {
+  const text = description.trim();
+  const itemNames: string[] = [];
+
+  const numberedMatch = text.match(/(?:\d+[.)]\s+.+)/g);
+  if (numberedMatch && numberedMatch.length >= 2) {
+    for (const m of numberedMatch) {
+      const cleaned = m.replace(/^\d+[.)]\s+/, "").trim();
+      if (cleaned) itemNames.push(cleaned);
+    }
+  }
+
+  if (itemNames.length === 0) {
+    const colonSplit = text.split(":").slice(1).join(":").trim();
+    const candidates = (colonSplit || text)
+      .split(/[,\n]/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    if (candidates.length >= 2) {
+      itemNames.push(...candidates);
+    }
+  }
+
+  if (itemNames.length === 0) {
+    const lines = text
+      .split(/\n/)
+      .map((s) => s.replace(/^[-•*]\s+/, "").trim())
+      .filter((s) => s.length > 0);
+    if (lines.length >= 2) {
+      itemNames.push(...lines);
+    }
+  }
+
+  if (itemNames.length === 0) {
+    itemNames.push(text);
+  }
+
+  return itemNames;
+}
+
+function normalizeGeneratedItems(raw: unknown): GeneratedItemDraft[] {
+ if (!Array.isArray(raw)) return [];
+ const results: GeneratedItemDraft[] = [];
+ for (const entry of raw) {
+ if (!entry || typeof entry !== "object") continue;
+ const item = entry as Record<string, unknown>;
+ const name = typeof item.name === "string" ? item.name.trim() : "";
+ if (!name) continue;
+ results.push({
+ name,
+ priority: typeof item.priority === "string" ? item.priority.trim() : undefined,
+ groupId: typeof item.groupId === "string" ? item.groupId : undefined,
+ });
+ }
+ return results;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const user = await getAuthUser();
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const body = await req.json();
-    const { boardId, description, groupId } = body;
+    const { boardId, description, groupId } = body as { boardId?: string; description?: string; groupId?: string };
 
     if (!boardId || !description?.trim()) {
       return NextResponse.json({ error: "boardId and description required" }, { status: 400 });
@@ -27,87 +84,92 @@ export async function POST(req: NextRequest) {
 
     const board = await prisma.board.findUnique({
       where: { id: boardId },
-      include: { groups: { orderBy: { position: "asc" } }, columns: true },
+      include: {
+        groups: { orderBy: { position: "asc" }, include: { items: { include: { assignees: true, columnValues: true } } } },
+        columns: true,
+        members: { include: { user: { select: { id: true, firstName: true, lastName: true, email: true } } } },
+      },
     });
     if (!board) return NextResponse.json({ error: "Board not found" }, { status: 404 });
 
-    // Parse description into item names
-    const text = description.trim();
-    const itemNames: string[] = [];
+    const fallbackNames = heuristicParseItems(description);
+    let parsedItems: GeneratedItemDraft[] = [];
 
-    // Try numbered list: "1. Foo 2. Bar" or "1) Foo"
-    const numberedMatch = text.match(/(?:\d+[.)]\s+.+)/g);
-    if (numberedMatch && numberedMatch.length >= 2) {
-      for (const m of numberedMatch) {
-        const cleaned = m.replace(/^\d+[.)]\s+/, "").trim();
-        if (cleaned) itemNames.push(cleaned);
+    const boardContext = buildBoardContext(board);
+    try {
+      const llm = await chatJSON<{ items?: Array<{ name?: string; priority?: string; groupId?: string }> }>(
+        "You extract actionable board items from natural language. Return JSON only.",
+        [
+          `Board context:\n${boardContext.summary}`,
+          `User request: ${description.trim()}`,
+          "Extract clear items. Keep names concise and specific.",
+          "Return JSON: {\"items\":[{\"name\":string,\"priority\"?:string,\"groupId\"?:string}]}",
+        ].join("\n\n"),
+        { temperature: 0.2, maxOutputTokens: 900 }
+      );
+
+      if (!llm.fallback) {
+        parsedItems = normalizeGeneratedItems(llm.data?.items ?? []);
       }
+    } catch (llmError) {
+      console.error("AI generate-items LLM fallback:", llmError);
     }
 
-    // Try comma-separated: "Create items: A, B, C"
-    if (itemNames.length === 0) {
-      const colonSplit = text.split(":").slice(1).join(":").trim();
-      const candidates = (colonSplit || text).split(/[,\n]/).map((s: string) => s.trim()).filter((s: string) => s.length > 0);
-      if (candidates.length >= 2) {
-        itemNames.push(...candidates);
-      }
+    if (parsedItems.length === 0) {
+      parsedItems = fallbackNames.map((name) => ({ name }));
     }
 
-    // Try line-separated
-    if (itemNames.length === 0) {
-      const lines = text.split(/\n/).map((s: string) => s.replace(/^[-•*]\s+/, "").trim()).filter((s: string) => s.length > 0);
-      if (lines.length >= 2) {
-        itemNames.push(...lines);
-      }
-    }
-
-    // Fallback: treat entire description as one item
-    if (itemNames.length === 0) {
-      itemNames.push(text);
-    }
-
-    // Determine target group
-    const targetGroup = groupId
-      ? board.groups.find((g) => g.id === groupId)
-      : board.groups[0];
-
-    if (!targetGroup) {
+    const fallbackGroup = groupId ? board.groups.find((g) => g.id === groupId) : board.groups[0];
+    if (!fallbackGroup) {
       return NextResponse.json({ error: "No group found" }, { status: 400 });
     }
 
-    // Get max position in target group
-    const lastItem = await prisma.item.findFirst({
-      where: { groupId: targetGroup.id },
-      orderBy: { position: "desc" },
-      select: { position: true },
-    });
-    let position = (lastItem?.position ?? -1) + 1;
+    const created: Array<{ id: string; name: string }> = [];
 
-    // Create items
-    const created = [];
-    for (const name of itemNames.slice(0, 50)) {
+    for (const draft of parsedItems.slice(0, 50)) {
+      const targetGroup =
+        (draft.groupId ? board.groups.find((group) => group.id === draft.groupId) : null) ??
+        fallbackGroup;
+
+      const lastItem = await prisma.item.findFirst({
+        where: { groupId: targetGroup.id },
+        orderBy: { position: "desc" },
+        select: { position: true },
+      });
+      const position = (lastItem?.position ?? -1) + 1;
+
       const item = await prisma.item.create({
         data: {
-          name,
+          name: draft.name,
           boardId,
           groupId: targetGroup.id,
-          position: position++,
+          position,
         },
       });
 
-      // Create default column values for each column
       for (const column of board.columns) {
         let defaultValue: unknown = null;
+
         if (column.columnType === "STATUS") {
           const config = column.config as Record<string, unknown> | null;
           const labels = (config?.labels as string[]) ?? ["Not Started", "Working on it", "Done", "Stuck"];
-          defaultValue = { label: labels[0] };
+
+          if (draft.priority && column.title.toLowerCase().includes("priority")) {
+            defaultValue = { label: draft.priority };
+          } else {
+            defaultValue = { label: labels[0] };
+          }
         } else if (column.columnType === "PROGRESS") {
           defaultValue = 0;
         }
+
         if (defaultValue !== null) {
           await prisma.columnValue.create({
-            data: { itemId: item.id, columnId: column.id, value: JSON.parse(JSON.stringify(defaultValue)) },
+            data: {
+              itemId: item.id,
+              columnId: column.id,
+              value: JSON.parse(JSON.stringify(defaultValue)),
+            },
           });
         }
       }
@@ -118,7 +180,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       created: created.length,
       items: created,
-      group: { id: targetGroup.id, name: targetGroup.name },
+      group: { id: fallbackGroup.id, name: fallbackGroup.name },
     });
   } catch (err) {
     console.error("AI generate-items error:", err);

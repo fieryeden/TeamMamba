@@ -1,19 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getAuthUser } from "@/lib/session";
+import { chat } from "@/lib/llm";
+import {
+  buildBoardContext,
+  computeBoardMetrics,
+  heuristicSummaryText,
+  type BoardShape,
+} from "@/lib/ai-utils";
 
-/**
- * POST /api/ai/summarize-board
- * Generate a natural language summary of a board's status.
- * Body: { boardId }
- */
 export async function POST(req: NextRequest) {
   try {
     const user = await getAuthUser();
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const body = await req.json();
-    const { boardId } = body;
+    const { boardId } = body as { boardId?: string };
     if (!boardId) return NextResponse.json({ error: "boardId required" }, { status: 400 });
 
     const membership = await prisma.boardMember.findFirst({ where: { boardId, userId: user.id } });
@@ -33,91 +35,53 @@ export async function POST(req: NextRequest) {
             },
           },
         },
-        members: { include: { user: { select: { id: true, firstName: true, lastName: true } } } },
+        members: { include: { user: { select: { id: true, firstName: true, lastName: true, email: true } } } },
       },
     });
     if (!board) return NextResponse.json({ error: "Board not found" }, { status: 404 });
 
-    const allItems = board.groups.flatMap((g) => g.items);
-    const statusCol = board.columns.find((c) => c.columnType === "STATUS");
-    const dateCol = board.columns.find((c) => c.columnType === "DATE");
+    const boardShape = board as unknown as BoardShape;
+    const metrics = computeBoardMetrics(boardShape);
+    const context = buildBoardContext(boardShape);
 
-    // Status breakdown
-    const statusCounts: Record<string, number> = {};
-    let unassigned = 0;
-    let overdue = 0;
-    const overdueItems: string[] = [];
+    let summary = heuristicSummaryText(board.name, metrics);
+    let provider: "openai" | "anthropic" | "none" = "none";
+    let fallback = true;
 
-    for (const item of allItems) {
-      const sv = item.columnValues.find((cv) => cv.columnId === statusCol?.id);
-      const status = (sv?.value as Record<string, unknown> | null)?.label ?? "No Status";
-      statusCounts[String(status)] = (statusCounts[String(status)] ?? 0) + 1;
+    try {
+      const llm = await chat(
+        "You are a concise project-management analyst. Write a clear board health summary in plain language.",
+        [
+          `Board context:\n${context.summary}`,
+          `Metrics JSON:\n${JSON.stringify(metrics)}`,
+          "Write 3-5 sentences with progress, blockers, and next focus. No markdown bullets.",
+        ].join("\n\n"),
+        { temperature: 0.2, maxOutputTokens: 350 }
+      );
 
-      if (item.assignees.length === 0) unassigned++;
-
-      if (dateCol) {
-        const dv = item.columnValues.find((cv) => cv.columnId === dateCol.id);
-        const dateStr = (dv?.value as Record<string, unknown> | null)?.date ?? (dv?.value as string | null);
-        if (dateStr && new Date(String(dateStr)) < new Date()) {
-          overdue++;
-          overdueItems.push(item.name);
-        }
+      provider = llm.provider;
+      fallback = llm.fallback;
+      if (!llm.fallback && llm.text.trim().length > 0) {
+        summary = llm.text.trim();
       }
+    } catch (llmError) {
+      console.error("AI summarize-board LLM fallback:", llmError);
     }
-
-    // Group summaries
-    const groupSummaries = board.groups.map((g) => {
-      const items = g.items;
-      const doneCount = items.filter((item) => {
-        const sv = item.columnValues.find((cv) => cv.columnId === statusCol?.id);
-        const label = (sv?.value as Record<string, unknown> | null)?.label;
-        return label === "Done" || label === "Complete";
-      }).length;
-      return {
-        name: g.name,
-        total: items.length,
-        done: doneCount,
-        progress: items.length > 0 ? Math.round((doneCount / items.length) * 100) : 0,
-      };
-    });
-
-    // Workload per member
-    const workload: Record<string, number> = {};
-    for (const item of allItems) {
-      for (const assignee of item.assignees) {
-        const name = `${assignee.user.firstName} ${assignee.user.lastName}`;
-        workload[name] = (workload[name] ?? 0) + 1;
-      }
-    }
-
-    const healthScore = Math.max(0, 100 - unassigned * 5 - overdue * 10);
-
-    // Build natural language summary
-    const totalItems = allItems.length;
-    const doneCount = statusCounts["Done"] ?? statusCounts["Complete"] ?? 0;
-    const completionRate = totalItems > 0 ? Math.round((doneCount / totalItems) * 100) : 0;
-
-    let summary = `Board "${board.name}" has ${totalItems} items across ${board.groups.length} groups. `;
-    summary += `${completionRate}% complete (${doneCount} done). `;
-    if (overdue > 0) {
-      summary += `⚠️ ${overdue} item${overdue > 1 ? "s" : ""} overdue. `;
-    }
-    if (unassigned > 0) {
-      summary += `${unassigned} item${unassigned > 1 ? "s" : ""} unassigned. `;
-    }
-    summary += `Health score: ${healthScore}/100.`;
 
     return NextResponse.json({
       summary,
-      totalItems,
-      completionRate,
-      statusBreakdown: statusCounts,
-      unassignedItems: unassigned,
-      overdueItems: overdue,
-      overdueItemNames: overdueItems.slice(0, 10),
-      groupSummaries,
-      workload,
-      healthScore,
+      metrics,
+      provider,
+      fallback,
+      totalItems: metrics.totalItems,
+      completionRate: metrics.completionRate,
+      statusBreakdown: metrics.statusBreakdown,
+      unassignedItems: metrics.unassignedItems,
+      overdueItems: metrics.overdueItems,
+      overdueItemNames: metrics.overdueItemNames.slice(0, 10),
+      groupSummaries: metrics.groupSummaries,
+      workload: metrics.workload,
+      healthScore: metrics.healthScore,
     });
   } catch (err) {
     console.error("AI summarize-board error:", err);
