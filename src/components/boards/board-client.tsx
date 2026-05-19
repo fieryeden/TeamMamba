@@ -21,6 +21,8 @@ import {
   List,
   MoreHorizontal,
   Plus,
+  Mail,
+  Shield,
   Sparkles,
   Trash2,
   X,
@@ -52,6 +54,8 @@ import { useBoardSocket } from "@/hooks/use-board-socket";
 import { useWorkspacePresence } from "@/hooks/use-workspace-presence";
 import { GanttView } from "@/components/boards/gantt-view";
 import { AIPanel } from "@/components/ai/ai-panel";
+import { ColumnPermissionsDialog } from "@/components/columns/column-permissions-dialog";
+import { EmailIngestionSettings } from "@/components/boards/email-ingestion-settings";
 
 interface ColumnValue {
   id: string;
@@ -317,6 +321,8 @@ export function BoardClient({ user, board }: BoardClientProps) {
   const [showAutomationModal, setShowAutomationModal] = useState(false);
   const [showColumnModal, setShowColumnModal] = useState(false);
   const [showAiPanel, setShowAiPanel] = useState(false);
+const [showColumnPermissions, setShowColumnPermissions] = useState(false);
+const [showEmailSettings, setShowEmailSettings] = useState(false);
   const [localComments, setLocalComments] = useState<Record<string, ItemComment[]>>({});
   const [localActivities, setLocalActivities] = useState<Record<string, Array<{ id: string; text: string; createdAt: string }>>>({});
   const [expandedSubitems, setExpandedSubitems] = useState<Record<string, boolean>>({});
@@ -504,7 +510,9 @@ export function BoardClient({ user, board }: BoardClientProps) {
         if (selectedItemIds.size > 0) { clearSelection(); e.preventDefault(); return; }
         if (showColumnModal) { setShowColumnModal(false); e.preventDefault(); return; }
         if (showAutomationModal) { setShowAutomationModal(false); e.preventDefault(); return; }
-        if (showShortcutsHelp) { setShowShortcutsHelp(false); e.preventDefault(); return; }
+        if (showColumnPermissions) { setShowColumnPermissions(false); e.preventDefault(); return; }
+ if (showEmailSettings) { setShowEmailSettings(false); e.preventDefault(); return; }
+ if (showShortcutsHelp) { setShowShortcutsHelp(false); e.preventDefault(); return; }
         return;
       }
 
@@ -1216,6 +1224,7 @@ export function BoardClient({ user, board }: BoardClientProps) {
   }, []);
 
   return (
+<>
     <div className="flex h-full flex-col">
       <div className="border-b bg-card px-4 py-3">
         <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
@@ -1438,6 +1447,12 @@ export function BoardClient({ user, board }: BoardClientProps) {
             <Button variant="ghost" size="sm" className="h-8" onClick={handleShareBoard}>
               Share
             </Button>
+            <Button variant="ghost" size="sm" className="h-8" onClick={() => setShowColumnPermissions(true)}>
+              <Shield className="mr-1 h-3.5 w-3.5" /> Permissions
+            </Button>
+ <Button variant="ghost" size="sm" className="h-8" onClick={() => setShowEmailSettings(true)}>
+   <Mail className="mr-1 h-3.5 w-3.5" /> Email
+ </Button>
             <Button
               variant={showAiPanel ? "default" : "ghost"}
               size="sm"
@@ -1622,6 +1637,30 @@ export function BoardClient({ user, board }: BoardClientProps) {
         <AddColumnModal boardId={board.id} columns={columns} onClose={() => setShowColumnModal(false)} />
       )}
     </div>
+ <ColumnPermissionsDialog
+   boardId={board.id}
+   columns={columns.map((c) => ({ id: c.id, title: c.title, columnType: c.columnType }))}
+   open={showColumnPermissions}
+   onClose={() => setShowColumnPermissions(false)}
+   onUpdate={() => setShowColumnPermissions(false)}
+ />
+ {showEmailSettings && (
+   <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+     <div className="w-full max-w-lg rounded-lg border bg-background p-0 shadow-xl">
+       <div className="flex items-center justify-between border-b px-4 py-3">
+         <h2 className="text-sm font-semibold">Email-to-Board Settings</h2>
+         <button className="text-muted-foreground hover:text-foreground" onClick={() => setShowEmailSettings(false)}>✕</button>
+       </div>
+       <div className="max-h-[70vh] overflow-auto p-4">
+         <EmailIngestionSettings
+           boardId={board.id}
+           groups={groups.map((g) => ({ id: g.id, name: g.name }))}
+         />
+       </div>
+     </div>
+   </div>
+ )}
+  </>
   );
 }
 
@@ -2316,6 +2355,13 @@ function CellRenderer({
     );
   }
 
+  if (column.columnType === "FORMULA") {
+    if (rawValue == null) return <span className="text-xs text-muted-foreground italic">fx</span>;
+    const formatted = typeof rawValue === "number"
+      ? (Number.isInteger(rawValue) ? rawValue.toLocaleString() : rawValue.toLocaleString(undefined, { maximumFractionDigits: 4 }))
+      : asString(rawValue);
+    return <span className="text-xs font-mono text-mamba-700">{formatted}</span>;
+  }
   if (column.columnType === "ITEM_ID") {
     return <span className="text-xs font-mono text-muted-foreground">{item.id.slice(0, 8)}</span>;
   }
@@ -4069,6 +4115,7 @@ function AutomationModal({
   const [trigger, setTrigger] = useState("STATUS_CHANGED");
   const [action, setAction] = useState("CHANGE_STATUS");
 
+
   const handleCreate = async () => {
     if (!name.trim()) return;
 
@@ -4154,6 +4201,25 @@ function AddColumnModal({
   const [connectColumnId, setConnectColumnId] = useState("");
   const [targetColumnId, setTargetColumnId] = useState("");
   const [rollupOperation, setRollupOperation] = useState("COUNT");
+  const [formulaExpression, setFormulaExpression] = useState("");
+  const [formulaValid, setFormulaValid] = useState<boolean | null>(null);
+  const [formulaError, setFormulaError] = useState("");
+ async function validateFormula(expr: string) {
+    if (!expr.trim()) { setFormulaValid(null); setFormulaError(""); return; }
+    try {
+      const res = await fetch("/api/formulas/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ formula: expr }),
+      });
+      const data = await res.json();
+      setFormulaValid(data.valid === true);
+      setFormulaError(data.error || "");
+    } catch {
+      setFormulaValid(false);
+      setFormulaError("Validation failed");
+    }
+  }
 
   const columnTypes = [
     { value: "TEXT", label: "Text" },
@@ -4168,6 +4234,7 @@ function AddColumnModal({
     { value: "CONNECT", label: "Connect" },
     { value: "MIRROR", label: "Mirror" },
     { value: "ROLLUP", label: "Rollup" },
+ { value: "FORMULA", label: "Formula" },
   ];
 
   const connectColumns = columns.filter((column) => column.columnType === "CONNECT");
@@ -4189,6 +4256,9 @@ function AddColumnModal({
           operation: rollupOperation,
         };
       }
+    if (columnType === "FORMULA") {
+      return { expression: formulaExpression };
+    }
       return undefined;
     })();
 
@@ -4234,6 +4304,22 @@ function AddColumnModal({
             </div>
           </div>
 
+          {columnType === "FORMULA" && (
+            <div className="space-y-2 rounded-md border p-3">
+              <p className="text-xs font-semibold text-muted-foreground">Formula Expression</p>
+              <div className="space-y-1">
+                <Input
+                  value={formulaExpression}
+                  onChange={(e) => { setFormulaExpression(e.target.value); validateFormula(e.target.value); }}
+                  placeholder='e.g. {Number} * {Rate}'
+                  className="font-mono text-xs"
+                />
+                {formulaValid === true && <p className="text-xs text-green-600">✓ Valid formula</p>}
+                {formulaValid === false && <p className="text-xs text-red-500">✗ {formulaError || "Invalid formula"}</p>}
+                {formulaValid === null && <p className="text-xs text-muted-foreground">Use {'{'}Column Name{'}'} to reference other columns. Supports +, -, *, /, SUM(), AVG(), COUNT(), MIN(), MAX().</p>}
+              </div>
+            </div>
+          )}
           {(columnType === "MIRROR" || columnType === "ROLLUP") && (
             <div className="space-y-2 rounded-md border p-3">
               <p className="text-xs font-semibold text-muted-foreground">Derived Column Config</p>
