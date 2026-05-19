@@ -10,7 +10,7 @@ import { BOARD_TEMPLATES } from "@/lib/board-templates";
 
 interface TopBarProps {
   user: { firstName: string; lastName: string };
-  workspaces?: Array<{ id: string; name: string }>;
+  workspaces?: Array<{ id: string; name: string; color?: string | null }>;
   onToggleSidebar?: () => void;
 }
 

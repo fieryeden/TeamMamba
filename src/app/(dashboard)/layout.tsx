@@ -9,7 +9,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
 
   const workspaces = await prisma.workspace.findMany({
     where: { members: { some: { userId: user.id } } },
-    select: { id: true, name: true },
+    select: { id: true, name: true, color: true },
     orderBy: { name: "asc" },
   });
   const dashboards = await prisma.dashboard.findMany({

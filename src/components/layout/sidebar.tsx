@@ -18,11 +18,12 @@ interface SidebarProps {
     role: string;
   };
   dashboards?: Array<{ id: string; name: string }>;
+  workspaces?: Array<{ id: string; name: string; color?: string | null }>;
   className?: string;
   onNavigate?: () => void;
 }
 
-export function DashboardSidebar({ user, dashboards = [], className, onNavigate }: SidebarProps) {
+export function DashboardSidebar({ user, dashboards = [], workspaces = [], className, onNavigate }: SidebarProps) {
   const pathname = usePathname();
 
   const navItems = [
@@ -98,6 +99,31 @@ export function DashboardSidebar({ user, dashboards = [], className, onNavigate 
                 title={dashboard.name}
               >
                 {dashboard.name}
+              </Link>
+            ))}
+          </div>
+        )}
+
+        {workspaces.length > 0 && (
+          <div className="mt-5 space-y-1">
+            <p className="px-3 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Workspaces
+            </p>
+            {workspaces.slice(0, 8).map((workspace) => (
+              <Link
+                key={workspace.id}
+                href={`/workspace/${workspace.id}`}
+                onClick={onNavigate}
+                className={cn(
+                  "block truncate rounded-lg border-l-4 px-3 py-1.5 text-xs transition-colors",
+                  pathname === `/workspace/${workspace.id}`
+                    ? "bg-accent text-foreground"
+                    : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                )}
+                style={{ borderLeftColor: workspace.color ?? "#579bfc" }}
+                title={workspace.name}
+              >
+                {workspace.name}
               </Link>
             ))}
           </div>

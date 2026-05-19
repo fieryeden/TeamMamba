@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getAuthUser } from "@/lib/session";
+import { createWorkspaceSchema } from "@/lib/validations";
 
 export async function GET() {
   try {
@@ -36,13 +37,14 @@ export async function POST(req: NextRequest) {
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const body = await req.json();
-    const { name, description, icon } = body;
+    const data = createWorkspaceSchema.parse(body);
 
     const workspace = await prisma.workspace.create({
       data: {
-        name,
-        description,
-        icon,
+        name: data.name,
+        description: data.description,
+        icon: data.icon,
+        color: data.color ?? "#579bfc",
         ownerId: user.id,
         members: { create: { userId: user.id, role: "OWNER" } },
       },

@@ -13,8 +13,11 @@ import {
 import {
   Calendar,
   CalendarDays,
+  Check,
   ChevronDown,
   ChevronRight,
+  Copy,
+  Edit2,
   Filter,
   GripVertical,
   LayoutGrid,
@@ -226,8 +229,12 @@ const textOperators: FilterOperatorOption[] = [
 ];
 
 function getFilterOperators(columnType: string): FilterOperatorOption[] {
-  if (columnType === "CHECKBOX") return textOperators.filter((entry) => entry.value !== "contains");
-  return textOperators;
+  switch (columnType) {
+    case "CHECKBOX":
+      return textOperators.filter((entry) => entry.value !== "contains");
+    default:
+      return textOperators;
+  }
 }
 
 function getDefaultFilter(columnId: string, columnType: string): FilterState {
@@ -278,6 +285,15 @@ function formatDuration(totalSeconds: number) {
   if (hours > 0) return `${hours}h ${minutes}m`;
   if (minutes > 0) return `${minutes}m ${seconds}s`;
   return `${seconds}s`;
+}
+
+function hexToRgba(hex: string, alpha: number): string {
+  const raw = hex.trim().replace("#", "");
+  if (!/^[0-9a-fA-F]{6}$/.test(raw)) return "transparent";
+  const r = parseInt(raw.slice(0, 2), 16);
+  const g = parseInt(raw.slice(2, 4), 16);
+  const b = parseInt(raw.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 const ITEM_COLOR_PRESETS = ["#579bfc", "#00c875", "#fdab3d", "#e2445c", "#a25ddc", "#ff158a", "#037f4c", "#676879"];
@@ -335,6 +351,18 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
   const [filters, setFilters] = useState<FilterState[]>([]);
   const [filterLogic, setFilterLogic] = useState<FilterLogic>("AND");
   const [searchQuery, setSearchQuery] = useState("");
+  const [showShareDialog, setShowShareDialog] = useState(false);
+  const [shareUrl, setShareUrl] = useState("");
+  const [shareExpiry, setShareExpiry] = useState("");
+  const [shareLoading, setShareLoading] = useState(false);
+  const [shareCopyError, setShareCopyError] = useState(false);
+  const [shareCopied, setShareCopied] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [showMondayImportDialog, setShowMondayImportDialog] = useState(false);
+  const [mondayImportMode, setMondayImportMode] = useState<"csv" | "api">("csv");
+  const [mondayImportFile, setMondayImportFile] = useState<File | null>(null);
+  const [mondayImportLoading, setMondayImportLoading] = useState(false);
+  const [mondayImportSummary, setMondayImportSummary] = useState<string | null>(null);
 
   const resizeRef = useRef<{ columnId: string; startX: number; startWidth: number } | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
@@ -575,59 +603,71 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
   }, [normalizedSearchQuery]);
 
   const matchesFilter = useCallback((item: Item, filter: FilterState) => {
-    const column = columns.find((entry) => entry.id === filter.columnId);
-    if (!column) return true;
-    const cv = item.columnValues.find((entry) => entry.column.id === column.id);
-    const value = cv?.value;
-    const textValue = asString(value).toLowerCase().trim();
-    const rawFilterValue = filter.value.trim().toLowerCase();
+    try {
+      if (!filter || !filter.columnId) return true;
+      const column = columns.find((entry) => entry.id === filter.columnId);
+      if (!column) return true;
 
-    if (filter.operator === "is_empty") {
-      if (column.columnType === "PEOPLE") return item.assignees.length === 0;
-      if (column.columnType === "CHECKBOX") return value == null;
-      return value == null || asString(value).trim() === "" || (Array.isArray(value) && value.length === 0);
-    }
-    if (filter.operator === "is_not_empty") {
-      if (column.columnType === "PEOPLE") return item.assignees.length > 0;
-      if (column.columnType === "CHECKBOX") return value != null;
-      return !(value == null || asString(value).trim() === "" || (Array.isArray(value) && value.length === 0));
-    }
+      const cv = item.columnValues.find((entry) => entry.column.id === column.id);
+      const value = cv?.value;
+      const textValue = asString(value).toLowerCase().trim();
+      const rawFilterValue = (filter.value ?? "").trim().toLowerCase();
 
-    if (column.columnType === "PEOPLE") {
-      const matchesId = item.assignees.some((assignee) => assignee.user.id.toLowerCase() === rawFilterValue);
-      const assigneeValues = item.assignees
-        .map((assignee) => `${assignee.user.firstName} ${assignee.user.lastName}`.toLowerCase())
-        .join(", ");
-      if (filter.operator === "contains") return assigneeValues.includes(rawFilterValue) || matchesId;
-      if (filter.operator === "equals") return assigneeValues === rawFilterValue || matchesId;
-      if (filter.operator === "not_equals") return assigneeValues !== rawFilterValue && !matchesId;
+      if (filter.operator === "is_empty") {
+        if (column.columnType === "PEOPLE") return item.assignees.length === 0;
+        if (column.columnType === "CHECKBOX") return value == null;
+        return value == null || asString(value).trim() === "" || (Array.isArray(value) && value.length === 0);
+      }
+      if (filter.operator === "is_not_empty") {
+        if (column.columnType === "PEOPLE") return item.assignees.length > 0;
+        if (column.columnType === "CHECKBOX") return value != null;
+        return !(value == null || asString(value).trim() === "" || (Array.isArray(value) && value.length === 0));
+      }
+
+      if (column.columnType === "PEOPLE") {
+        const matchesId = item.assignees.some((assignee) => assignee.user.id.toLowerCase() === rawFilterValue);
+        const assigneeValues = item.assignees
+          .map((assignee) => `${assignee.user.firstName} ${assignee.user.lastName}`.toLowerCase())
+          .join(", ");
+        if (filter.operator === "contains") return assigneeValues.includes(rawFilterValue) || matchesId;
+        if (filter.operator === "equals") return assigneeValues === rawFilterValue || matchesId;
+        if (filter.operator === "not_equals") return assigneeValues !== rawFilterValue && !matchesId;
+        return true;
+      }
+
+      if (column.columnType === "CHECKBOX") {
+        const checkboxLabel = Boolean(value) ? "true" : "false";
+        if (filter.operator === "equals") return checkboxLabel === rawFilterValue;
+        if (filter.operator === "not_equals") return checkboxLabel !== rawFilterValue;
+        if (filter.operator === "contains") return checkboxLabel.includes(rawFilterValue);
+        return true;
+      }
+
+      if (filter.operator === "equals") return textValue === rawFilterValue;
+      if (filter.operator === "not_equals") return textValue !== rawFilterValue;
+      if (filter.operator === "contains") return textValue.includes(rawFilterValue);
+      return true;
+    } catch (err) {
+      console.error("Filter evaluation failed:", err);
       return true;
     }
-
-    if (column.columnType === "CHECKBOX") {
-      const checkboxLabel = Boolean(value) ? "true" : "false";
-      if (filter.operator === "equals") return checkboxLabel === rawFilterValue;
-      if (filter.operator === "not_equals") return checkboxLabel !== rawFilterValue;
-      if (filter.operator === "contains") return checkboxLabel.includes(rawFilterValue);
-      return true;
-    }
-
-    if (filter.operator === "equals") return textValue === rawFilterValue;
-    if (filter.operator === "not_equals") return textValue !== rawFilterValue;
-    if (filter.operator === "contains") return textValue.includes(rawFilterValue);
-    return true;
   }, [columns]);
 
   const filteredGroups = useMemo(() => {
-    return groups.map((group) => ({
-      ...group,
-      items: group.items.filter((item) => {
-        if (!matchesSearch(item)) return false;
-        if (!activeFilters.length) return true;
-        if (filterLogic === "AND") return activeFilters.every((filter) => matchesFilter(item, filter));
-        return activeFilters.some((filter) => matchesFilter(item, filter));
-      }),
-    }));
+    try {
+      return groups.map((group) => ({
+        ...group,
+        items: group.items.filter((item) => {
+          if (!matchesSearch(item)) return false;
+          if (!activeFilters.length) return true;
+          if (filterLogic === "AND") return activeFilters.every((filter) => matchesFilter(item, filter));
+          return activeFilters.some((filter) => matchesFilter(item, filter));
+        }),
+      }));
+    } catch (err) {
+      console.error("Failed to apply filters:", err);
+      return groups;
+    }
   }, [activeFilters, filterLogic, groups, matchesFilter, matchesSearch]);
 
   const selectedItem = useMemo(() => {
@@ -1048,6 +1088,35 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
     );
   }, []);
 
+  const handleRenameGroup = useCallback(async (groupId: string, name: string) => {
+    const nextName = name.trim();
+    if (!nextName) return;
+
+    setGroups((prev) => prev.map((group) => (group.id === groupId ? { ...group, name: nextName } : group)));
+    try {
+      await fetch(`/api/groups/${groupId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: nextName }),
+      });
+    } catch (err) {
+      console.error("Failed to rename group:", err);
+    }
+  }, []);
+
+  const handleUpdateGroupColor = useCallback(async (groupId: string, color: string) => {
+    setGroups((prev) => prev.map((group) => (group.id === groupId ? { ...group, color } : group)));
+    try {
+      await fetch(`/api/groups/${groupId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ color }),
+      });
+    } catch (err) {
+      console.error("Failed to update group color:", err);
+    }
+  }, []);
+
   const handleSort = useCallback((columnId: string) => {
     setSortState((current) => {
       if (!current || current.columnId !== columnId) {
@@ -1154,6 +1223,12 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
     setSearchQuery(view.filters?.searchQuery ?? "");
   };
 
+  useEffect(() => {
+    if (!toastMessage) return;
+    const timeout = window.setTimeout(() => setToastMessage(null), 2800);
+    return () => window.clearTimeout(timeout);
+  }, [toastMessage]);
+
   const handleExportBoard = async () => {
     const res = await fetch(`/api/boards/${board.id}/export`);
     if (!res.ok) return;
@@ -1189,17 +1264,87 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
     window.location.reload();
   };
 
-  const handleShareBoard = async () => {
-    const res = await fetch("/api/guest-access", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ boardId: board.id }),
-    });
-    if (!res.ok) return;
-    const data = await res.json();
-    const shareUrl = data.shareUrl as string;
-    await navigator.clipboard.writeText(shareUrl);
-    window.alert(`Share link copied:\n${shareUrl}`);
+  const createShareLink = useCallback(async () => {
+    setShareLoading(true);
+    setShareCopyError(false);
+    try {
+      const payload: { boardId: string; expiresAt?: string } = { boardId: board.id };
+      if (shareExpiry) payload.expiresAt = new Date(shareExpiry).toISOString();
+
+      const res = await fetch("/api/guest-access", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        setToastMessage("Failed to create share link");
+        return null;
+      }
+      const data = await res.json();
+      const nextUrl = data.shareUrl as string;
+      setShareUrl(nextUrl);
+      setToastMessage("Share link created");
+      return nextUrl;
+    } catch {
+      setToastMessage("Failed to create share link");
+      return null;
+    } finally {
+      setShareLoading(false);
+    }
+  }, [board.id, shareExpiry]);
+
+  const copyShareUrl = useCallback(async () => {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setShareCopied(true);
+      setShareCopyError(false);
+      setToastMessage("Share link copied");
+      window.setTimeout(() => setShareCopied(false), 1600);
+    } catch {
+      setShareCopyError(true);
+      setToastMessage("Clipboard blocked. Copy manually.");
+    }
+  }, [shareUrl]);
+
+  const handleShareBoard = () => {
+    setShowShareDialog(true);
+    if (!shareUrl && !shareLoading) {
+      createShareLink().catch(() => {});
+    }
+  };
+
+  const handleImportMonday = async () => {
+    if (!mondayImportFile) return;
+    setMondayImportLoading(true);
+    setMondayImportSummary(null);
+    try {
+      const formData = new FormData();
+      formData.append("boardId", board.id);
+      formData.append("file", mondayImportFile);
+      const res = await fetch("/api/boards/import-monday", {
+        method: "POST",
+        body: formData,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMondayImportSummary(data.error ?? "Monday import failed");
+        return;
+      }
+      const summary = [
+        `Rows imported: ${data.rowsImported ?? 0}`,
+        `Groups created: ${Array.isArray(data.groupsCreated) ? data.groupsCreated.length : 0}`,
+        `Columns created: ${Array.isArray(data.columnsCreated) ? data.columnsCreated.length : 0}`,
+        `Errors: ${Array.isArray(data.errors) ? data.errors.length : 0}`,
+      ].join("\n");
+      setMondayImportSummary(summary);
+      setToastMessage("Monday import complete");
+      window.setTimeout(() => window.location.reload(), 800);
+    } catch {
+      setMondayImportSummary("Monday import failed");
+    } finally {
+      setMondayImportLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -1309,7 +1454,7 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
                 )}
 
                 {filters.map((filter) => {
-                  const selectedColumn = columns.find((column) => column.id === filter.columnId) ?? columns[0];
+                  const selectedColumn = columns.find((column) => column.id === filter.columnId);
                   if (!selectedColumn) return null;
                   const operators = getFilterOperators(selectedColumn.columnType);
                   const operator = operators.find((entry) => entry.value === filter.operator) ?? operators[0];
@@ -1444,8 +1589,17 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
             <Button variant="ghost" size="sm" className="h-8" onClick={() => importInputRef.current?.click()}>
               Import CSV/XLSX
             </Button>
-            <Button variant="ghost" size="sm" className="h-8" onClick={handleShareBoard}>
+            <Button variant="ghost" size="sm" className="h-8" onClick={() => setShowMondayImportDialog(true)}>
+              Import Monday.com
+            </Button>
+            <Button
+              variant={shareUrl ? "secondary" : "ghost"}
+              size="sm"
+              className="h-8"
+              onClick={handleShareBoard}
+            >
               Share
+              {shareUrl && <span className="ml-1 h-2 w-2 rounded-full bg-mamba-500" />}
             </Button>
             <Button variant="ghost" size="sm" className="h-8" onClick={() => setShowColumnPermissions(true)}>
               <Shield className="mr-1 h-3.5 w-3.5" /> Permissions
@@ -1515,6 +1669,8 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
             onToggleItemSelect={toggleItemSelect}
             onSelectAll={() => selectAll(filteredGroups.flatMap((g) => g.items.map((i) => i.id)))}
             onReorderItems={handleReorderTableItems}
+            onRenameGroup={handleRenameGroup}
+            onUpdateGroupColor={handleUpdateGroupColor}
           />
         )}
 
@@ -1527,6 +1683,7 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
             onCreateItemInLane={handleCreateKanbanItem}
             searchQuery={normalizedSearchQuery}
             onSelectItem={(itemId) => setSelectedItemId(itemId)}
+            onReorderItems={handleReorderTableItems}
           />
         )}
 
@@ -1658,6 +1815,104 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
          />
        </div>
      </div>
+   </div>
+ )}
+ <Dialog open={showShareDialog} onOpenChange={setShowShareDialog}>
+   <DialogContent>
+     <DialogHeader>
+       <DialogTitle>Share Board</DialogTitle>
+     </DialogHeader>
+     <div className="space-y-3">
+       <label className="space-y-1 text-xs text-muted-foreground">
+         Link expiry (optional)
+         <Input
+           type="datetime-local"
+           value={shareExpiry}
+           onChange={(event) => setShareExpiry(event.target.value)}
+           className="h-8 text-xs"
+         />
+       </label>
+       <Button
+         size="sm"
+         variant="outline"
+         className="h-8"
+         onClick={() => createShareLink().catch(() => {})}
+         disabled={shareLoading}
+       >
+         {shareLoading ? "Generating..." : shareUrl ? "Regenerate Link" : "Generate Link"}
+       </Button>
+       <div className="space-y-1">
+         <label className="text-xs text-muted-foreground">Share URL</label>
+         <div className="flex items-center gap-2">
+           <Input value={shareUrl} readOnly className="h-8 text-xs" />
+           <Button size="sm" className="h-8" onClick={() => copyShareUrl().catch(() => {})} disabled={!shareUrl}>
+             {shareCopied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+           </Button>
+         </div>
+       </div>
+       {shareCopyError && (
+         <p className="text-xs text-muted-foreground">
+           Clipboard permission failed. Select and copy the URL manually.
+         </p>
+       )}
+     </div>
+   </DialogContent>
+ </Dialog>
+ <Dialog open={showMondayImportDialog} onOpenChange={setShowMondayImportDialog}>
+   <DialogContent>
+     <DialogHeader>
+       <DialogTitle>Import from Monday.com</DialogTitle>
+     </DialogHeader>
+     <div className="space-y-3">
+       <div className="flex items-center gap-2">
+         <Button
+           type="button"
+           size="sm"
+           variant={mondayImportMode === "csv" ? "default" : "outline"}
+           onClick={() => setMondayImportMode("csv")}
+         >
+           CSV Mode
+         </Button>
+         <Button
+           type="button"
+           size="sm"
+           variant={mondayImportMode === "api" ? "default" : "outline"}
+           onClick={() => setMondayImportMode("api")}
+         >
+           API Mode
+         </Button>
+       </div>
+       {mondayImportMode === "csv" ? (
+         <div className="space-y-2">
+           <Input
+             type="file"
+             accept=".csv,text/csv"
+             className="h-9 text-xs"
+             onChange={(event) => setMondayImportFile(event.target.files?.[0] ?? null)}
+           />
+           <Button
+             size="sm"
+             className="h-8"
+             disabled={!mondayImportFile || mondayImportLoading}
+             onClick={() => handleImportMonday().catch(() => {})}
+           >
+             {mondayImportLoading ? "Importing..." : "Import Monday CSV"}
+           </Button>
+         </div>
+       ) : (
+         <div className="rounded-md border p-2 text-xs text-muted-foreground">
+           API mode is planned next. CSV mode is available now.
+         </div>
+       )}
+       {mondayImportSummary && (
+         <pre className="max-h-32 overflow-auto rounded border bg-muted/30 p-2 text-[11px]">{mondayImportSummary}</pre>
+       )}
+     </div>
+   </DialogContent>
+ </Dialog>
+ {toastMessage && (
+   <div className="fixed right-4 top-4 z-[70] rounded-md border bg-card px-3 py-2 text-xs shadow-lg">
+     {toastMessage}
    </div>
  )}
   </>
@@ -1815,6 +2070,8 @@ function TableView({
   onToggleItemSelect,
   onSelectAll,
   onReorderItems,
+  onRenameGroup,
+  onUpdateGroupColor,
 }: {
   boardId: string;
   groups: Group[];
@@ -1848,6 +2105,8 @@ function TableView({
   onToggleItemSelect: (itemId: string) => void;
   onSelectAll: () => void;
   onReorderItems: (itemId: string, sourceGroupId: string, destinationGroupId: string, destinationIndex: number) => void;
+  onRenameGroup: (groupId: string, name: string) => void;
+  onUpdateGroupColor: (groupId: string, color: string) => void;
 }) {
   const handleDragEnd = (result: DropResult) => {
     if (!result.destination) return;
@@ -1972,6 +2231,8 @@ function TableView({
               onToggleSubitems={onToggleSubitems}
               selectedItemIds={selectedItemIds}
               onToggleItemSelect={onToggleItemSelect}
+              onRenameGroup={onRenameGroup}
+              onUpdateGroupColor={onUpdateGroupColor}
             />
           ))}
 
@@ -2020,6 +2281,8 @@ function GroupRows({
   onToggleSubitems,
   selectedItemIds,
   onToggleItemSelect,
+  onRenameGroup,
+  onUpdateGroupColor,
 }: {
   boardId: string;
   group: Group;
@@ -2048,8 +2311,16 @@ function GroupRows({
   onToggleSubitems: (itemId: string) => void;
   selectedItemIds: Set<string>;
   onToggleItemSelect: (itemId: string) => void;
+  onRenameGroup: (groupId: string, name: string) => void;
+  onUpdateGroupColor: (groupId: string, color: string) => void;
 }) {
   const statusColumn = columns.find((column) => column.columnType === "STATUS");
+  const [editingGroupName, setEditingGroupName] = useState(false);
+  const [groupNameDraft, setGroupNameDraft] = useState(group.name);
+
+  useEffect(() => {
+    setGroupNameDraft(group.name);
+  }, [group.name]);
 
   return (
     <Droppable droppableId={group.id}>
@@ -2058,41 +2329,114 @@ function GroupRows({
           <tr className="group-row">
             <td colSpan={columns.length + 3} className="p-0">
               <div className="group-header" style={{ borderLeftColor: group.color, backgroundColor: `${group.color}11` }}>
-                <button
-                  className="flex items-center gap-1"
-                  onClick={() => onToggleCollapse(group.id)}
-                >
+                <button className="flex items-center gap-1" onClick={() => onToggleCollapse(group.id)}>
                   {group.isCollapsed ? (
                     <ChevronRight className="h-4 w-4" style={{ color: group.color }} />
                   ) : (
                     <ChevronDown className="h-4 w-4" style={{ color: group.color }} />
                   )}
-                  <span style={{ color: group.color }}>{group.name}</span>
-                  <span className="text-xs text-muted-foreground">({group.items.length})</span>
                 </button>
-                <Button variant="ghost" size="icon" className="ml-auto h-7 w-7">
-                  <MoreHorizontal className="h-3.5 w-3.5" />
-                </Button>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <button
+                      type="button"
+                      className="h-3.5 w-3.5 rounded-full border"
+                      style={{ backgroundColor: group.color }}
+                      aria-label="Set group color"
+                    />
+                  </PopoverTrigger>
+                  <PopoverContent className="w-40 space-y-2">
+                    <input
+                      type="color"
+                      value={group.color}
+                      className="h-8 w-full rounded border p-0.5"
+                      onChange={(event) => onUpdateGroupColor(group.id, event.target.value)}
+                    />
+                    <div className="grid grid-cols-4 gap-1">
+                      {ITEM_COLOR_PRESETS.map((preset) => (
+                        <button
+                          key={`${group.id}-${preset}`}
+                          type="button"
+                          className={cn(
+                            "h-5 w-5 rounded border",
+                            group.color === preset && "ring-1 ring-foreground"
+                          )}
+                          style={{ backgroundColor: preset }}
+                          onClick={() => onUpdateGroupColor(group.id, preset)}
+                        />
+                      ))}
+                    </div>
+                  </PopoverContent>
+                </Popover>
+                {editingGroupName ? (
+                  <Input
+                    value={groupNameDraft}
+                    className="h-7 max-w-[220px] text-sm"
+                    autoFocus
+                    onChange={(event) => setGroupNameDraft(event.target.value)}
+                    onBlur={() => {
+                      onRenameGroup(group.id, groupNameDraft);
+                      setEditingGroupName(false);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter") return;
+                      event.currentTarget.blur();
+                    }}
+                  />
+                ) : (
+                  <span className="cursor-text" style={{ color: group.color }} onDoubleClick={() => setEditingGroupName(true)}>
+                    {group.name}
+                  </span>
+                )}
+                <span className="text-xs text-muted-foreground">({group.items.length})</span>
+                <button
+                  type="button"
+                  className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                  onClick={() => setEditingGroupName(true)}
+                  aria-label="Rename group"
+                >
+                  <Edit2 className="h-3.5 w-3.5" />
+                </button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="icon" className="ml-auto h-7 w-7">
+                      <MoreHorizontal className="h-3.5 w-3.5" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={() => setEditingGroupName(true)}>
+                      <Edit2 className="mr-2 h-3.5 w-3.5" /> Rename
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
             </td>
           </tr>
 
           {!group.isCollapsed && sortedItems.map((item, index) => (
             <Draggable key={item.id} draggableId={item.id} index={index}>
-              {(dragProvided, dragSnapshot) => (
-                <tr
-                  ref={dragProvided.innerRef}
-                  {...dragProvided.draggableProps}
-                  className={cn(
-                    "item-row",
-                    searchQuery && "bg-mamba-50/35",
-                    snapshot.isDraggingOver && "bg-mamba-50/30",
-                    dragSnapshot.isDragging && "bg-card shadow-lg"
-                  )}
-                  onClick={() => onSelectItem(item.id)}
-                  style={item.color ? { borderLeft: `3px solid ${item.color}` } : undefined}
-                >
-                  <td className="w-10 px-2">
+              {(dragProvided, dragSnapshot) => {
+                const itemTint = item.color ? hexToRgba(item.color, 0.09) : undefined;
+                return (
+                  <tr
+                    ref={dragProvided.innerRef}
+                    {...dragProvided.draggableProps}
+                    className={cn(
+                      "item-row",
+                      searchQuery && "bg-mamba-50/35",
+                      snapshot.isDraggingOver && "bg-mamba-50/30",
+                      dragSnapshot.isDragging && "bg-card shadow-lg"
+                    )}
+                    onClick={() => onSelectItem(item.id)}
+                    style={
+                      item.color
+                        ? {
+                            borderLeft: `3px solid ${item.color}`,
+                          }
+                        : undefined
+                    }
+                  >
+                  <td className="w-10 px-2" style={itemTint ? { backgroundColor: itemTint } : undefined}>
                     <div className="flex items-center gap-1">
                       <button
                         type="button"
@@ -2112,7 +2456,7 @@ function GroupRows({
                       />
                     </div>
                   </td>
-                  <td className="sticky left-0 min-w-[260px] bg-background px-3 py-2">
+                  <td className="sticky left-0 min-w-[260px] bg-background px-3 py-2" style={itemTint ? { backgroundColor: itemTint } : undefined}>
                     <div className="flex items-center gap-2">
                       {item.subitems && item.subitems.length > 0 && (
                         <button
@@ -2159,6 +2503,7 @@ function GroupRows({
                       key={column.id}
                       className="min-w-[130px] px-2 py-1"
                       onClick={(event) => event.stopPropagation()}
+                      style={itemTint ? { backgroundColor: itemTint } : undefined}
                     >
                       <CellRenderer
                         boardId={boardId}
@@ -2173,7 +2518,7 @@ function GroupRows({
                     </td>
                   ))}
 
-                  <td className="w-10 px-1" onClick={(event) => event.stopPropagation()}>
+                  <td className="w-10 px-1" onClick={(event) => event.stopPropagation()} style={itemTint ? { backgroundColor: itemTint } : undefined}>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button variant="ghost" size="icon" className="h-7 w-7">
@@ -2187,8 +2532,9 @@ function GroupRows({
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </td>
-                </tr>
-              )}
+                  </tr>
+                );
+              }}
             </Draggable>
           ))}
           {!group.isCollapsed && (
@@ -2543,7 +2889,7 @@ function CellRenderer({
         <span className="h-4 w-4 rounded border" style={{ backgroundColor: color }} />
         <input
           type="color"
-          defaultValue={color}
+          value={color}
           onChange={(event) => onUpdateValue(cv.id, event.target.value)}
           className="h-7 w-9 rounded border p-0.5"
         />
@@ -2818,6 +3164,7 @@ function KanbanView({
   columns,
   onCycleStatus,
   onUpdateValue,
+  onReorderItems,
   onCreateItemInLane,
   searchQuery,
   onSelectItem,
@@ -2826,6 +3173,7 @@ function KanbanView({
   columns: Column[];
   onCycleStatus: (itemId: string, cv: ColumnValue) => void;
   onUpdateValue: (valueId: string, value: unknown) => void;
+  onReorderItems: (itemId: string, sourceGroupId: string, destinationGroupId: string, destinationIndex: number) => void;
   onCreateItemInLane: (statusIndex: number) => void;
   searchQuery: string;
   onSelectItem: (itemId: string) => void;
@@ -2910,6 +3258,8 @@ function KanbanView({
         [destinationLane]: destinationIds,
       };
     });
+
+    onReorderItems(draggedItem.id, draggedItem.groupId, draggedItem.groupId, destination.index);
 
     if (sourceLane !== destinationLane) {
       const statusValue = draggedItem.columnValues.find((value) => value.column.id === statusColumn.id);
@@ -3521,6 +3871,15 @@ function ItemDetailPanel({
 
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-muted-foreground">Color</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="color"
+                      className="h-7 w-9 rounded border p-0.5"
+                      value={item.color ?? "#579bfc"}
+                      onChange={(event) => onUpdateItemFields(item.id, { color: event.target.value })}
+                    />
+                    <span className="text-xs text-muted-foreground">{item.color ?? "No color"}</span>
+                  </div>
                   <div className="flex flex-wrap gap-2">
                     <button
                       type="button"

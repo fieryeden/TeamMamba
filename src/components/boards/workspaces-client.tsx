@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Plus, FolderKanban, Users, MoreHorizontal, Trash2 } from "lucide-react";
+import { Edit2, FolderKanban, MoreHorizontal, Plus, Trash2, Users } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/dialog";
 
 interface Workspace {
-  id: string; name: string; description: string | null; icon: string | null;
+  id: string; name: string; description: string | null; icon: string | null; color: string | null;
   owner: { id: string; firstName: string; lastName: string };
   boards: Array<{ id: string; name: string; boardKind: string; _count: { items: number } }>;
   _count: { boards: number; members: number };
@@ -27,6 +27,11 @@ export function WorkspacesClient({ workspaces: initial }: { workspaces: Workspac
   const [showNew, setShowNew] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [color, setColor] = useState("#579bfc");
+  const [editingWorkspaceId, setEditingWorkspaceId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState("");
+  const [editingDescription, setEditingDescription] = useState("");
+  const [editingColor, setEditingColor] = useState("#579bfc");
 
   const handleCreate = async () => {
     if (!name.trim()) return;
@@ -34,21 +39,60 @@ export function WorkspacesClient({ workspaces: initial }: { workspaces: Workspac
       const res = await fetch("/api/workspaces", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, description: description || undefined }),
+        body: JSON.stringify({ name, description: description || undefined, color }),
       });
       const data = await res.json();
       if (res.ok) {
         setWorkspaces((prev) => [
           ...prev,
-          { ...data.workspace, boards: [], _count: { boards: 0, members: 1 } },
+          { ...data.workspace, color: data.workspace.color ?? color, boards: [], _count: { boards: 0, members: 1 } },
         ]);
         setName("");
         setDescription("");
+        setColor("#579bfc");
         setShowNew(false);
       }
     } catch (err) {
       console.error("Failed to create workspace:", err);
     }
+  };
+
+  const openEditWorkspace = (workspace: Workspace) => {
+    setEditingWorkspaceId(workspace.id);
+    setEditingName(workspace.name);
+    setEditingDescription(workspace.description ?? "");
+    setEditingColor(workspace.color ?? "#579bfc");
+  };
+
+  const saveWorkspaceEdit = async () => {
+    if (!editingWorkspaceId) return;
+    const nextName = editingName.trim();
+    if (!nextName) return;
+
+    const res = await fetch(`/api/workspaces/${editingWorkspaceId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: nextName,
+        description: editingDescription.trim() || "",
+        color: editingColor,
+      }),
+    });
+    if (!res.ok) return;
+
+    setWorkspaces((prev) =>
+      prev.map((workspace) =>
+        workspace.id === editingWorkspaceId
+          ? {
+              ...workspace,
+              name: nextName,
+              description: editingDescription.trim() || null,
+              color: editingColor,
+            }
+          : workspace
+      )
+    );
+    setEditingWorkspaceId(null);
   };
 
   return (
@@ -64,8 +108,10 @@ export function WorkspacesClient({ workspaces: initial }: { workspaces: Workspac
         {workspaces.map((ws) => (
           <Card
             key={ws.id}
-            className="hover:shadow-md transition-shadow cursor-pointer group"
+            className="hover:shadow-md transition-shadow cursor-pointer group border-l-4"
+            style={{ borderLeftColor: ws.color ?? "#579bfc" }}
             onClick={() => router.push(`/workspace/${ws.id}`)}
+            onDoubleClick={() => openEditWorkspace(ws)}
           >
               <CardHeader className="pb-2">
                 <div className="flex items-center justify-between">
@@ -85,6 +131,14 @@ export function WorkspacesClient({ workspaces: initial }: { workspaces: Workspac
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openEditWorkspace(ws);
+                        }}
+                      >
+                        <Edit2 className="h-3 w-3 mr-2" /> Rename / Edit
+                      </DropdownMenuItem>
                       <DropdownMenuItem className="text-destructive" onClick={(e) => e.stopPropagation()}>
                         <Trash2 className="h-3 w-3 mr-2" /> Delete
                       </DropdownMenuItem>
@@ -158,10 +212,56 @@ export function WorkspacesClient({ workspaces: initial }: { workspaces: Workspac
                 onChange={(e) => setDescription(e.target.value)}
               />
             </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Accent Color</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="color"
+                  className="h-8 w-10 rounded border p-0.5"
+                  value={color}
+                  onChange={(event) => setColor(event.target.value)}
+                />
+                <span className="text-xs text-muted-foreground">{color}</span>
+              </div>
+            </div>
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setShowNew(false)}>Cancel</Button>
             <Button onClick={handleCreate} className="bg-mamba-600 hover:bg-mamba-700">Create</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(editingWorkspaceId)} onOpenChange={(open) => !open && setEditingWorkspaceId(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Workspace</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Name</label>
+              <Input value={editingName} onChange={(event) => setEditingName(event.target.value)} autoFocus />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Description</label>
+              <Input value={editingDescription} onChange={(event) => setEditingDescription(event.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Accent Color</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="color"
+                  className="h-8 w-10 rounded border p-0.5"
+                  value={editingColor}
+                  onChange={(event) => setEditingColor(event.target.value)}
+                />
+                <span className="text-xs text-muted-foreground">{editingColor}</span>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setEditingWorkspaceId(null)}>Cancel</Button>
+            <Button onClick={saveWorkspaceEdit} className="bg-mamba-600 hover:bg-mamba-700">Save</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -12,6 +12,51 @@ import { formatDate } from "@/lib/utils";
 import { useTheme } from "next-themes";
 import { NotificationPermission } from "@/components/pwa/notification-permission";
 
+function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
+  const raw = hex.trim().replace("#", "");
+  if (!/^[0-9a-fA-F]{6}$/.test(raw)) return null;
+  return {
+    r: parseInt(raw.slice(0, 2), 16),
+    g: parseInt(raw.slice(2, 4), 16),
+    b: parseInt(raw.slice(4, 6), 16),
+  };
+}
+
+function rgbToHsl(rgb: { r: number; g: number; b: number }) {
+  const r = rgb.r / 255;
+  const g = rgb.g / 255;
+  const b = rgb.b / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const delta = max - min;
+  const lightness = (max + min) / 2;
+
+  let hue = 0;
+  if (delta !== 0) {
+    if (max === r) hue = ((g - b) / delta) % 6;
+    else if (max === g) hue = (b - r) / delta + 2;
+    else hue = (r - g) / delta + 4;
+  }
+  const saturation = delta === 0 ? 0 : delta / (1 - Math.abs(2 * lightness - 1));
+
+  return {
+    h: Math.round((hue * 60 + 360) % 360),
+    s: Math.round(saturation * 100),
+    l: Math.round(lightness * 100),
+  };
+}
+
+function getAccentVariables(hex: string): { accent: string; accentForeground: string } | null {
+  const rgb = hexToRgb(hex);
+  if (!rgb) return null;
+  const hsl = rgbToHsl(rgb);
+  const foreground = hsl.l <= 55 ? "0 0% 100%" : "222.2 47.4% 11.2%";
+  return {
+    accent: `${hsl.h} ${hsl.s}% ${hsl.l}%`,
+    accentForeground: foreground,
+  };
+}
+
 interface SettingsClientProps {
   user: {
     id: string;
@@ -83,6 +128,16 @@ export function SettingsClient({ user, apiTokens: initialTokens }: SettingsClien
     if (storedTheme === "dark") setThemePreference("DARK");
     if (storedTheme === "system") setThemePreference("SYSTEM");
   }, [setTheme, user.themePreference]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const storedAccent = localStorage.getItem("tm-accent");
+    if (!storedAccent) return;
+    const vars = getAccentVariables(storedAccent);
+    if (!vars) return;
+    document.documentElement.style.setProperty("--accent", vars.accent);
+    document.documentElement.style.setProperty("--accent-foreground", vars.accentForeground);
+  }, []);
 
   const handleSaveProfile = async () => {
     setSaving(true);
@@ -165,7 +220,10 @@ export function SettingsClient({ user, apiTokens: initialTokens }: SettingsClien
   const handleAccentChange = (color: string) => {
     setAccentColor(color);
     localStorage.setItem("tm-accent", color);
-    document.documentElement.style.setProperty("--accent", color);
+    const vars = getAccentVariables(color);
+    if (!vars) return;
+    document.documentElement.style.setProperty("--accent", vars.accent);
+    document.documentElement.style.setProperty("--accent-foreground", vars.accentForeground);
   };
 
   const handleEmailPrefChange = async (key: keyof typeof emailPrefs, value: boolean) => {

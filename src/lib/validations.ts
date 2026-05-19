@@ -22,12 +22,14 @@ export const createWorkspaceSchema = z.object({
   name: z.string().min(1).max(200),
   description: z.string().max(1000).optional(),
   icon: z.string().optional(),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
 });
 
 export const updateWorkspaceSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   description: z.string().max(1000).optional(),
   icon: z.string().optional(),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/).nullable().optional(),
 });
 
 // Board

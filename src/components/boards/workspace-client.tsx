@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import {
-  Plus, FolderKanban, MoreHorizontal, Trash2,
+  Edit2, Plus, FolderKanban, MoreHorizontal, Trash2,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -18,7 +18,7 @@ import {
 
 interface WorkspaceClientProps {
   workspace: {
-    id: string; name: string; description: string | null; icon: string | null;
+    id: string; name: string; description: string | null; icon: string | null; color: string | null;
     owner: { id: string; firstName: string; lastName: string; avatarUrl: string | null };
     members: Array<{ user: { id: string; firstName: string; lastName: string; avatarUrl: string | null } }>;
     boards: Array<{ id: string; name: string; boardKind: string; _count: { items: number } }>;
@@ -26,10 +26,23 @@ interface WorkspaceClientProps {
 }
 
 export function WorkspaceClient({ workspace }: WorkspaceClientProps) {
+  const [workspaceName, setWorkspaceName] = useState(workspace.name);
+  const [workspaceDescription, setWorkspaceDescription] = useState(workspace.description ?? "");
+  const [workspaceColor, setWorkspaceColor] = useState(workspace.color ?? "#579bfc");
+  const [editingWorkspaceName, setEditingWorkspaceName] = useState(false);
   const [boards, setBoards] = useState(workspace.boards);
   const [showNewBoard, setShowNewBoard] = useState(false);
   const [newBoardName, setNewBoardName] = useState("");
   const [newBoardKind, setNewBoardKind] = useState("KANBAN");
+
+  const patchWorkspace = async (patch: { name?: string; description?: string; color?: string }) => {
+    const res = await fetch(`/api/workspaces/${workspace.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    return res.ok;
+  };
 
   const handleCreateBoard = async () => {
     if (!newBoardName.trim()) return;
@@ -58,14 +71,66 @@ export function WorkspaceClient({ workspace }: WorkspaceClientProps) {
     <div className="space-y-6">
       {/* Workspace Header */}
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
+        <div className="space-y-2 rounded-lg border-l-4 px-3 py-2" style={{ borderLeftColor: workspaceColor }}>
+          {editingWorkspaceName ? (
+            <Input
+              className="h-9 w-[320px] text-2xl font-bold"
+              value={workspaceName}
+              autoFocus
+              onChange={(event) => setWorkspaceName(event.target.value)}
+              onBlur={async () => {
+                const nextName = workspaceName.trim();
+                if (!nextName) {
+                  setWorkspaceName(workspace.name);
+                  setEditingWorkspaceName(false);
+                  return;
+                }
+                const ok = await patchWorkspace({ name: nextName });
+                if (!ok) setWorkspaceName(workspace.name);
+                setEditingWorkspaceName(false);
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return;
+                event.currentTarget.blur();
+              }}
+            />
+          ) : (
+            <h1 className="text-2xl font-bold flex items-center gap-2" onDoubleClick={() => setEditingWorkspaceName(true)}>
             {workspace.icon && <span>{workspace.icon}</span>}
-            {workspace.name}
+            {workspaceName}
+            <button
+              type="button"
+              className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+              onClick={() => setEditingWorkspaceName(true)}
+              aria-label="Rename workspace"
+            >
+              <Edit2 className="h-4 w-4" />
+            </button>
           </h1>
-          {workspace.description && (
-            <p className="text-muted-foreground mt-1">{workspace.description}</p>
           )}
+          <Input
+            className="h-8 max-w-lg text-sm"
+            value={workspaceDescription}
+            placeholder="Workspace description"
+            onChange={(event) => setWorkspaceDescription(event.target.value)}
+            onBlur={() => {
+              patchWorkspace({ description: workspaceDescription.trim() || "" }).catch(() => {});
+            }}
+          />
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-medium text-muted-foreground">Accent</label>
+            <input
+              type="color"
+              className="h-7 w-9 rounded border p-0.5"
+              value={workspaceColor}
+              onChange={(event) => {
+                const nextColor = event.target.value;
+                setWorkspaceColor(nextColor);
+                patchWorkspace({ color: nextColor }).catch(() => {});
+              }}
+            />
+            <span className="text-xs text-muted-foreground">{workspaceColor}</span>
+          </div>
         </div>
         <div className="flex items-center gap-3">
           {/* Members */}
@@ -93,7 +158,7 @@ export function WorkspaceClient({ workspace }: WorkspaceClientProps) {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {boards.map((board) => (
           <Link key={board.id} href={`/board/${board.id}`}>
-            <Card className="hover:shadow-md transition-shadow cursor-pointer group">
+            <Card className="hover:shadow-md transition-shadow cursor-pointer group border-l-4" style={{ borderLeftColor: workspaceColor }}>
               <CardHeader className="pb-2">
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-base flex items-center gap-2">

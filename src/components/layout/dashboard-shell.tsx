@@ -21,7 +21,7 @@ export function DashboardShell({
     avatarUrl: string | null;
     role: string;
   };
-  workspaces: Array<{ id: string; name: string }>;
+  workspaces: Array<{ id: string; name: string; color?: string | null }>;
   dashboards: Array<{ id: string; name: string }>;
   children: React.ReactNode;
 }) {
@@ -37,7 +37,7 @@ export function DashboardShell({
 
   return (
     <div className="flex h-screen overflow-hidden">
-      <DashboardSidebar user={user} dashboards={dashboards} className="hidden md:flex" />
+      <DashboardSidebar user={user} dashboards={dashboards} workspaces={workspaces} className="hidden md:flex" />
 
       <div
         className={cn(
@@ -45,7 +45,12 @@ export function DashboardShell({
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
         )}
       >
-        <DashboardSidebar user={user} dashboards={dashboards} onNavigate={() => setSidebarOpen(false)} />
+        <DashboardSidebar
+          user={user}
+          dashboards={dashboards}
+          workspaces={workspaces}
+          onNavigate={() => setSidebarOpen(false)}
+        />
       </div>
       {sidebarOpen && (
         <button

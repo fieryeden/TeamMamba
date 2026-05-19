@@ -20,7 +20,7 @@ interface DashboardClientProps {
     onboardingCompleted?: boolean;
   };
   workspaces: Array<{
-    id: string; name: string; description: string | null; icon: string | null;
+    id: string; name: string; description: string | null; icon: string | null; color: string | null;
     boards: Array<{ id: string; name: string; boardKind: string; _count: { items: number } }>;
     _count: { members: number };
   }>;
@@ -127,7 +127,7 @@ export function DashboardClient({ user, workspaces, recentActivities }: Dashboar
       {/* Workspaces */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {workspaces.map((ws) => (
-          <Card key={ws.id}>
+          <Card key={ws.id} className="border-l-4" style={{ borderLeftColor: ws.color ?? "#579bfc" }}>
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-lg flex items-center gap-2">
