@@ -267,9 +267,9 @@ export function DocsClient({ workspaces }: DocsClientProps) {
   const unpinned = filtered.filter((d) => !d.pinned);
 
   return (
-    <div className="flex h-full gap-6">
+    <div className="flex h-full flex-col md:flex-row gap-6">
       {/* Doc list sidebar */}
-      <div className="w-80 shrink-0 space-y-4">
+      <div className="w-full md:w-80 md:shrink-0 space-y-4 md:overflow-y-auto md:max-h-full">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold">Docs</h1>
           <Button size="sm" onClick={() => setShowNewDoc(true)}>

@@ -117,20 +117,6 @@ export function WorkspaceClient({ workspace }: WorkspaceClientProps) {
               patchWorkspace({ description: workspaceDescription.trim() || "" }).catch(() => {});
             }}
           />
-          <div className="flex items-center gap-2">
-            <label className="text-xs font-medium text-muted-foreground">Accent</label>
-            <input
-              type="color"
-              className="h-7 w-9 rounded border p-0.5"
-              value={workspaceColor}
-              onChange={(event) => {
-                const nextColor = event.target.value;
-                setWorkspaceColor(nextColor);
-                patchWorkspace({ color: nextColor }).catch(() => {});
-              }}
-            />
-            <span className="text-xs text-muted-foreground">{workspaceColor}</span>
-          </div>
         </div>
         <div className="flex items-center gap-3">
           {/* Members */}

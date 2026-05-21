@@ -39,7 +39,35 @@ export function TeamClient({ currentUser, members: initialMembers }: TeamClientP
   const [members, setMembers] = useState(initialMembers);
   const [showInvite, setShowInvite] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteSaving, setInviteSaving] = useState(false);
+  const [inviteError, setInviteError] = useState("");
   const [changingRole, setChangingRole] = useState<string | null>(null);
+
+  const handleSendInvite = async () => {
+    if (!inviteEmail.trim()) return;
+    setInviteSaving(true);
+    setInviteError("");
+    try {
+      const res = await fetch("/api/invites", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: inviteEmail.trim() }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setInviteEmail("");
+        setShowInvite(false);
+        // Refresh the page to show the new member
+        window.location.reload();
+      } else {
+        setInviteError(data.error || "Failed to send invite");
+      }
+    } catch {
+      setInviteError("Network error");
+    } finally {
+      setInviteSaving(false);
+    }
+  };
   const [removingMember, setRemovingMember] = useState<string | null>(null);
   const [showRoleDialog, setShowRoleDialog] = useState(false);
   const [roleTarget, setRoleTarget] = useState<TeamMember | null>(null);
@@ -184,9 +212,10 @@ export function TeamClient({ currentUser, members: initialMembers }: TeamClientP
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setShowInvite(false)}>Cancel</Button>
-            <Button className="bg-mamba-600 hover:bg-mamba-700" disabled={!inviteEmail.trim()}>
-              <Mail className="h-3 w-3 mr-1" /> Send Invite
+            <Button className="bg-mamba-600 hover:bg-mamba-700" disabled={!inviteEmail.trim() || inviteSaving} onClick={handleSendInvite}>
+              <Mail className="h-3 w-3 mr-1" /> {inviteSaving ? "Sending..." : "Send Invite"}
             </Button>
+            {inviteError && <p className="text-xs text-destructive mt-1">{inviteError}</p>}
           </DialogFooter>
         </DialogContent>
       </Dialog>

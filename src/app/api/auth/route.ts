@@ -176,3 +176,17 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
+
+
+// Logout - clear session cookie
+export async function DELETE() {
+  const res = NextResponse.json({ success: true });
+  res.cookies.set("token", "", {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production" && process.env.SECURE_COOKIES === "true",
+    sameSite: "lax",
+    maxAge: 0,
+    path: "/",
+  });
+  return res;
+}

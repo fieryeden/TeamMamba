@@ -3297,12 +3297,15 @@ function KanbanView({
                       return (
                         <Draggable key={item.id} draggableId={item.id} index={itemIndex}>
                           {(dragProvided) => (
-                            <button
+                            <div
+                      role="button"
+                      tabIndex={0}
                               ref={dragProvided.innerRef}
                               {...dragProvided.draggableProps}
                               {...dragProvided.dragHandleProps}
-                              className={cn("kanban-card", searchQuery && "ring-1 ring-mamba-300")}
+                              className={cn("kanban-card cursor-grab active:cursor-grabbing", searchQuery && "ring-1 ring-mamba-300")}
                               onClick={() => onSelectItem(item.id)}
+                              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelectItem(item.id); } }}
                             >
                               <p className="text-left text-sm font-medium">{item.icon ? `${item.icon} ` : ""}{item.name}</p>
                               <p className="text-left text-[11px] text-muted-foreground">{item.groupName}</p>
@@ -3329,7 +3332,7 @@ function KanbanView({
                                   </span>
                                 )}
                               </div>
-                            </button>
+                            </div>
                           )}
                         </Draggable>
                       );

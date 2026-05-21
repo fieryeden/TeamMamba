@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, FolderKanban, Settings, Zap, Bell, Users,
   BarChart3, FileText, Webhook, Activity, Plug,
+  LogOut,
 } from "lucide-react";
 
 interface SidebarProps {
@@ -105,11 +106,11 @@ export function DashboardSidebar({ user, dashboards = [], workspaces = [], class
         )}
 
         {workspaces.length > 0 && (
-          <div className="mt-5 space-y-1">
+          <div className="mt-5 space-y-1 max-h-48 overflow-y-auto">
             <p className="px-3 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
               Workspaces
             </p>
-            {workspaces.slice(0, 8).map((workspace) => (
+            {workspaces.map((workspace) => (
               <Link
                 key={workspace.id}
                 href={`/workspace/${workspace.id}`}
@@ -141,6 +142,16 @@ export function DashboardSidebar({ user, dashboards = [], workspaces = [], class
             <p className="truncate text-xs text-muted-foreground">{user.email}</p>
           </div>
         </div>
+        <button
+          onClick={async () => {
+            await fetch("/api/auth", { method: "DELETE" });
+            window.location.href = "/login";
+          }}
+          className="mt-1 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <LogOut className="h-4 w-4" />
+          Sign Out
+        </button>
       </div>
     </aside>
   );

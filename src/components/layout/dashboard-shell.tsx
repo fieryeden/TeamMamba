@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { LayoutDashboard, FolderKanban, Zap, Bell, Settings } from "lucide-react";
 import { DashboardSidebar } from "@/components/layout/sidebar";
 import { TopBar } from "@/components/layout/topbar";
@@ -26,6 +26,22 @@ export function DashboardShell({
   children: React.ReactNode;
 }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [localWorkspaces, setLocalWorkspaces] = useState(workspaces);
+
+  // Sync with prop changes (e.g. full page navigation)
+  useEffect(() => { setLocalWorkspaces(workspaces); }, [workspaces]);
+
+  // Listen for real-time workspace color changes from child components
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { workspaceId, color } = (e as CustomEvent).detail;
+      setLocalWorkspaces((prev) =>
+        prev.map((w) => (w.id === workspaceId ? { ...w, color } : w))
+      );
+    };
+    window.addEventListener("workspace-color-change", handler);
+    return () => window.removeEventListener("workspace-color-change", handler);
+  }, []);
 
   const mobileNav = [
     { href: "/dashboard", label: "Home", icon: LayoutDashboard },
@@ -37,7 +53,7 @@ export function DashboardShell({
 
   return (
     <div className="flex h-screen overflow-hidden">
-      <DashboardSidebar user={user} dashboards={dashboards} workspaces={workspaces} className="hidden md:flex" />
+      <DashboardSidebar user={user} dashboards={dashboards} workspaces={localWorkspaces} className="hidden md:flex" />
 
       <div
         className={cn(
@@ -48,7 +64,7 @@ export function DashboardShell({
         <DashboardSidebar
           user={user}
           dashboards={dashboards}
-          workspaces={workspaces}
+          workspaces={localWorkspaces}
           onNavigate={() => setSidebarOpen(false)}
         />
       </div>
@@ -62,7 +78,7 @@ export function DashboardShell({
       <div className="flex flex-1 flex-col overflow-hidden">
         <TopBar
           user={user}
-          workspaces={workspaces}
+          workspaces={localWorkspaces}
           onToggleSidebar={() => setSidebarOpen((prev) => !prev)}
         />
         <main className="flex-1 overflow-auto bg-muted/30 p-4 pb-20 md:p-6 md:pb-6">{children}</main>
