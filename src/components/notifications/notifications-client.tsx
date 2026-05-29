@@ -44,6 +44,7 @@ export function NotificationsClient({ notifications: initial }: { notifications:
     DUE_DATE: "📅",
     AUTOMATION: "⚡",
     SYSTEM: "🔔",
+    BROADCAST: "📢",
   };
 
   return (

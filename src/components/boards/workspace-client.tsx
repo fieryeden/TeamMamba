@@ -15,6 +15,7 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
+import { BroadcastModal } from "@/components/boards/broadcast-modal";
 
 interface WorkspaceClientProps {
   workspace: {
@@ -34,6 +35,7 @@ export function WorkspaceClient({ workspace }: WorkspaceClientProps) {
   const [showNewBoard, setShowNewBoard] = useState(false);
   const [newBoardName, setNewBoardName] = useState("");
   const [newBoardKind, setNewBoardKind] = useState("KANBAN");
+  const [showBroadcast, setShowBroadcast] = useState(false);
 
   const patchWorkspace = async (patch: { name?: string; description?: string; color?: string }) => {
     const res = await fetch(`/api/workspaces/${workspace.id}`, {
@@ -137,6 +139,9 @@ export function WorkspaceClient({ workspace }: WorkspaceClientProps) {
           <Button onClick={() => setShowNewBoard(true)} className="bg-mamba-600 hover:bg-mamba-700">
             <Plus className="mr-1 h-4 w-4" /> New Board
           </Button>
+          <Button variant="outline" onClick={() => setShowBroadcast(true)}>
+            📢 Announcement
+          </Button>
         </div>
       </div>
 
@@ -232,6 +237,9 @@ export function WorkspaceClient({ workspace }: WorkspaceClientProps) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {showBroadcast && (
+        <BroadcastModal workspaceId={workspace.id} onClose={() => setShowBroadcast(false)} />
+      )}
     </div>
   );
 }
