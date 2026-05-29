@@ -19,7 +19,7 @@ import { BroadcastModal } from "@/components/boards/broadcast-modal";
 
 interface WorkspaceClientProps {
   workspace: {
-    id: string; name: string; description: string | null; icon: string | null; color: string | null;
+    id: string; name: string; description: string | null; icon: string | null; color: string | null; logoUrl: string | null; customDomain: string | null;
     owner: { id: string; firstName: string; lastName: string; avatarUrl: string | null };
     members: Array<{ user: { id: string; firstName: string; lastName: string; avatarUrl: string | null } }>;
     boards: Array<{ id: string; name: string; boardKind: string; _count: { items: number } }>;
@@ -36,8 +36,10 @@ export function WorkspaceClient({ workspace }: WorkspaceClientProps) {
   const [newBoardName, setNewBoardName] = useState("");
   const [newBoardKind, setNewBoardKind] = useState("KANBAN");
   const [showBroadcast, setShowBroadcast] = useState(false);
+  const [workspaceLogoUrl, setWorkspaceLogoUrl] = useState(workspace.logoUrl ?? "");
+  const [workspaceCustomDomain, setWorkspaceCustomDomain] = useState(workspace.customDomain ?? "");
 
-  const patchWorkspace = async (patch: { name?: string; description?: string; color?: string }) => {
+  const patchWorkspace = async (patch: { name?: string; description?: string; color?: string; logoUrl?: string | null; customDomain?: string | null }) => {
     const res = await fetch(`/api/workspaces/${workspace.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -147,31 +149,31 @@ export function WorkspaceClient({ workspace }: WorkspaceClientProps) {
 
       {/* Workspace Branding */}
       <div className="rounded-lg border p-4 space-y-3">
-        <h3 className="text-sm font-medium">Workspace Branding</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div className="space-y-1">
-            <label className="text-xs text-muted-foreground">Logo URL</label>
-            <Input
-              className="h-8 text-xs"
-              placeholder="https://example.com/logo.png"
-              value=""
-              onChange={async (e) => {
-                const url = e.target.value.trim();
-                await patchWorkspace({ logoUrl: url || null } as any);
-              }}
-            />
-          </div>
-          <div className="space-y-1">
-            <label className="text-xs text-muted-foreground">Custom Domain</label>
-            <Input
-              className="h-8 text-xs"
-              placeholder="boards.yourcompany.com"
-              value=""
-              onChange={async (e) => {
-                const domain = e.target.value.trim().toLowerCase();
-                await patchWorkspace({ customDomain: domain || null } as any);
-              }}
-            />
+          <h3 className="text-sm font-medium">Workspace Branding</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">Logo URL</label>
+              <Input
+                className="h-8 text-xs"
+                placeholder="https://example.com/logo.png"
+                value={workspaceLogoUrl}
+                onChange={(e) => setWorkspaceLogoUrl(e.target.value)}
+                onBlur={async () => {
+                  await patchWorkspace({ logoUrl: workspaceLogoUrl.trim() || null });
+                }}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">Custom Domain</label>
+              <Input
+                className="h-8 text-xs"
+                placeholder="boards.yourcompany.com"
+                value={workspaceCustomDomain}
+                onChange={(e) => setWorkspaceCustomDomain(e.target.value)}
+                onBlur={async () => {
+                  await patchWorkspace({ customDomain: workspaceCustomDomain.trim().toLowerCase() || null });
+                }}
+              />
           </div>
         </div>
       </div>
