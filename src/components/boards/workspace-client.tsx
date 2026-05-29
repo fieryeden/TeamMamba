@@ -145,6 +145,37 @@ export function WorkspaceClient({ workspace }: WorkspaceClientProps) {
         </div>
       </div>
 
+      {/* Workspace Branding */}
+      <div className="rounded-lg border p-4 space-y-3">
+        <h3 className="text-sm font-medium">Workspace Branding</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">Logo URL</label>
+            <Input
+              className="h-8 text-xs"
+              placeholder="https://example.com/logo.png"
+              value=""
+              onChange={async (e) => {
+                const url = e.target.value.trim();
+                await patchWorkspace({ logoUrl: url || null } as any);
+              }}
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">Custom Domain</label>
+            <Input
+              className="h-8 text-xs"
+              placeholder="boards.yourcompany.com"
+              value=""
+              onChange={async (e) => {
+                const domain = e.target.value.trim().toLowerCase();
+                await patchWorkspace({ customDomain: domain || null } as any);
+              }}
+            />
+          </div>
+        </div>
+      </div>
+
       {/* Boards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {boards.map((board) => (

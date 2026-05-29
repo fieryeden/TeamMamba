@@ -30,6 +30,8 @@ export const updateWorkspaceSchema = z.object({
   description: z.string().max(1000).optional(),
   icon: z.string().optional(),
   color: z.string().regex(/^#[0-9a-fA-F]{6}$/).nullable().optional(),
+  logoUrl: z.string().url().max(2048).nullable().optional(),
+  customDomain: z.string().max(253).regex(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/).nullable().optional(),
 });
 
 // Board
