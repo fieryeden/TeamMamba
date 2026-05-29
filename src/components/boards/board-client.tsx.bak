@@ -325,9 +325,8 @@ function getComparableValue(item: Item, column: Column): string | number {
 }
 
 export function BoardClient({ user, board }: BoardClientProps) {
-
-    const [columns, setColumns] = useState<Column[]>(board.columns);
   const [groups, setGroups] = useState<Group[]>(board.groups);
+  const [columns, setColumns] = useState<Column[]>(board.columns);
   const [viewMode, setViewMode] = useState<ViewMode>("TABLE");
   const [sortState, setSortState] = useState<SortState>(null);
   const [newItemName, setNewItemName] = useState<Record<string, string>>({});
@@ -367,7 +366,6 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
 
   const resizeRef = useRef<{ columnId: string; startX: number; startWidth: number } | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
-  const pendingValueUpdates = useRef<Map<string, { value: unknown; timestamp: number }>>(new Map());
   const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(new Set());
   const toggleItemSelect = useCallback((itemId: string) => {
     setSelectedItemIds((prev) => {
@@ -400,25 +398,10 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
     },
     onItemUpdated: (data) => {
       const d = data as { boardId: string; item: Item };
-      console.log('[SOCKET-ITEM-UPDATED]', { itemId: d.item.id, name: (d.item as any).name, statusCol: d.item.columnValues?.find((cv: any) => cv.column?.id === statusColumn?.id)?.value });
       setGroups((prev) =>
         prev.map((g) => ({
           ...g,
-          items: g.items.map((it) => {
-            if (it.id !== d.item.id) return it;
-            // Check if any column values have pending optimistic updates
-            const hasPending = d.item.columnValues.some((cv) => pendingValueUpdates.current.has(cv.id));
-            if (hasPending) {
-              // Merge: keep optimistic values where pending, use server values elsewhere
-              const mergedCVs = d.item.columnValues.map((cv) => {
-                const pending = pendingValueUpdates.current.get(cv.id);
-                if (pending) return { ...cv, value: pending.value };
-                return cv;
-              });
-              return { ...d.item, columnValues: mergedCVs };
-            }
-            return d.item;
-          }),
+          items: g.items.map((it) => (it.id === d.item.id ? d.item : it)),
         }))
       );
     },
@@ -433,7 +416,6 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
     },
     onItemMoved: (data) => {
       const d = data as { boardId: string; item: Item; fromGroupId: string; toGroupId: string };
-      console.log('[SOCKET-ITEM-MOVED]', { itemId: d.item.id, from: d.fromGroupId, to: d.toGroupId });
       setGroups((prev) => {
         let movedItem: Item | undefined;
         const without = prev.map((g) => {
@@ -455,18 +437,6 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
     },
     onColumnUpdated: (data) => {
       const d = data as { boardId: string; columnValue: ColumnValue };
-      console.log('[SOCKET-COLUMN-UPDATED]', { cvId: d.columnValue.id, columnId: (d.columnValue as any).column?.id ?? (d.columnValue as any).columnId, value: d.columnValue.value });
-      const pending = pendingValueUpdates.current.get(d.columnValue.id);
-      if (pending) {
-        const serverValue = d.columnValue.value;
-        const pendingValue = pending.value;
-        const matches = JSON.stringify(serverValue) === JSON.stringify(pendingValue);
-        if (!matches) {
-          pendingValueUpdates.current.delete(d.columnValue.id);
-          return;
-        }
-        pendingValueUpdates.current.delete(d.columnValue.id);
-      }
       setGroups((prev) =>
         prev.map((g) => ({
           ...g,
@@ -719,8 +689,6 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
   }, []);
 
   const patchColumnValueInState = useCallback((valueId: string, value: unknown) => {
-    pendingValueUpdates.current.set(valueId, { value, timestamp: Date.now() });
-    setTimeout(() => pendingValueUpdates.current.delete(valueId), 5000);
     setGroups((prev) =>
       prev.map((group) => ({
         ...group,
@@ -753,33 +721,16 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
   }, []);
 
   const handleUpdateValue = useCallback(async (valueId: string, value: unknown) => {
-    let oldValue: unknown = undefined;
-    setGroups((prev) => {
-      for (const g of prev) {
-        for (const it of g.items) {
-          const cv = it.columnValues.find((c) => c.id === valueId);
-          if (cv) { oldValue = cv.value; break; }
-        }
-        if (oldValue !== undefined) break;
-      }
-      return prev;
-    });
-
     patchColumnValueInState(valueId, value);
 
     try {
-      const res = await fetch(`/api/columns/values/${valueId}`, {
+      await fetch(`/api/columns/values/${valueId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ value }),
       });
-      if (!res.ok) throw new Error('PATCH failed');
     } catch (err) {
       console.error("Failed to update value:", err);
-      pendingValueUpdates.current.delete(valueId);
-      if (oldValue !== undefined) {
-        patchColumnValueInState(valueId, oldValue);
-      }
     }
   }, [patchColumnValueInState]);
 
@@ -932,36 +883,6 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
     setNewItemName((prev) => ({ ...prev, [groupId]: "" }));
     setShowNewItem((prev) => ({ ...prev, [groupId]: false }));
   }, [createItemInGroup, newItemName]);
-
-
-  // Handle cross-lane drag: finds the status columnValue from groups state
-
-  const statusColumn = columns.find((column) => column.columnType === "STATUS");
-
-  // Build a map of itemId -> status columnValue ID from live groups state
-  const itemStatusCvMap = useRef<Map<string, string>>(new Map());
-  useEffect(() => {
-    if (!statusColumn) return;
-    const map = new Map<string, string>();
-    for (const g of groups) {
-      for (const item of g.items) {
-        const cv = (item as any).columnValues?.find((cv: any) => cv.column?.id === statusColumn.id);
-        if (cv) map.set(item.id, cv.id);
-      }
-    }
-    itemStatusCvMap.current = map;
-    console.log('[KANBAN] itemStatusCvMap built', { size: map.size, sampleKeys: [...map.keys()].slice(0,3) });
-  }, [groups, statusColumn]);
-
-  const handleKanbanCrossLane = useCallback(async (itemId: string, destinationLane: number) => {
-    const cvId = itemStatusCvMap.current.get(itemId);
-    console.log('[KANBAN] handleKanbanCrossLane', { itemId, cvId, destLane: destinationLane });
-    if (cvId) {
-      handleUpdateValue(cvId, destinationLane);
-    } else {
-      console.warn('[KANBAN] could not find status columnValue for item', itemId);
-    }
-  }, [handleUpdateValue]);
 
   const handleCreateKanbanItem = useCallback(async (statusIndex: number) => {
     const targetGroup = groups[0];
@@ -1750,7 +1671,6 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
             onReorderItems={handleReorderTableItems}
             onRenameGroup={handleRenameGroup}
             onUpdateGroupColor={handleUpdateGroupColor}
-            setColumns={setColumns}
           />
         )}
 
@@ -1760,7 +1680,6 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
             columns={columns}
             onCycleStatus={handleCycleStatus}
             onUpdateValue={handleUpdateValue}
-            onKanbanCrossLane={handleKanbanCrossLane}
             onCreateItemInLane={handleCreateKanbanItem}
             searchQuery={normalizedSearchQuery}
             onSelectItem={(itemId) => setSelectedItemId(itemId)}
@@ -2128,7 +2047,6 @@ function TableView({
   boardId,
   groups,
   columns,
-  setColumns,
   sortState,
   getSortedItems,
   onSort,
@@ -2189,7 +2107,6 @@ function TableView({
   onReorderItems: (itemId: string, sourceGroupId: string, destinationGroupId: string, destinationIndex: number) => void;
   onRenameGroup: (groupId: string, name: string) => void;
   onUpdateGroupColor: (groupId: string, color: string) => void;
-  setColumns: Dispatch<SetStateAction<Column[]>>;
 }) {
   const handleDragEnd = (result: DropResult) => {
     if (!result.destination) return;
@@ -2207,43 +2124,6 @@ function TableView({
       result.destination.index
     );
   };
-
-  // Column drag reorder state
-  const [columnDragIndex, setColumnDragIndex] = useState<number | null>(null);
-  const [columnDropIndex, setColumnDropIndex] = useState<number | null>(null);
-
-  const handleColumnDragStart = useCallback((index: number) => {
-    setColumnDragIndex(index);
-  }, []);
-
-  const handleColumnDragOver = useCallback((e: React.DragEvent, index: number) => {
-    e.preventDefault();
-    setColumnDropIndex(index);
-  }, []);
-
-  const handleColumnDrop = useCallback((targetIndex: number) => {
-    if (columnDragIndex === null || columnDragIndex === targetIndex) {
-      setColumnDragIndex(null);
-      setColumnDropIndex(null);
-      return;
-    }
-    const newColumns = [...columns];
-    const [moved] = newColumns.splice(columnDragIndex, 1);
-    newColumns.splice(targetIndex, 0, moved);
-    setColumns(newColumns);
-    // Persist new order to server
-    newColumns.forEach((col, i) => {
-      if (col.order !== i) {
-        fetch(`/api/columns/${col.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ order: i }),
-        });
-      }
-    });
-    setColumnDragIndex(null);
-    setColumnDropIndex(null);
-  }, [columnDragIndex, columns, setColumns]);
 
   const summaryFormatter = useMemo(
     () => new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }),
@@ -2297,50 +2177,26 @@ function TableView({
             <tr>
               <th className="w-10" />
               <th className="sticky left-0 min-w-[260px] bg-background">Item</th>
-              {columns.map((column, colIndex) => {
+              {columns.map((column) => {
                 const isSorted = sortState?.columnId === column.id;
-                const isDragging = columnDragIndex === colIndex;
-                const isDragOver = columnDropIndex === colIndex && columnDragIndex !== colIndex;
 
                 return (
-                  <th
-                    key={column.id}
-                    style={{ width: column.width ?? 170 }}
-                    className={cn(
-                      "relative min-w-[130px] select-none transition-opacity",
-                      isDragging && "opacity-50",
-                      isDragOver && "bg-mamba-50"
-                    )}
-                    draggable
-                    onDragStart={() => handleColumnDragStart(colIndex)}
-                    onDragOver={(e) => handleColumnDragOver(e, colIndex)}
-                    onDrop={() => handleColumnDrop(colIndex)}
-                    onDragEnd={() => { setColumnDragIndex(null); setColumnDropIndex(null); }}
-                  >
-                    <div className="flex items-center gap-1">
-                      <span
-                        className="cursor-grab text-muted-foreground/40 hover:text-muted-foreground/80 active:cursor-grabbing"
-                        title="Drag to reorder"
-                      >
-                        ⠿
-                      </span>
-                      <button
-                        className="flex flex-1 items-center justify-between gap-2 text-left"
-                        onClick={() => onSort(column.id)}
-                      >
-                        <span className="truncate">{column.title}</span>
-                        {isSorted && (
-                          <span className="text-[10px] text-mamba-700">
-                            {sortState?.direction === "asc" ? "▲" : "▼"}
-                          </span>
-                        )}
-                      </button>
-                    </div>
+                  <th key={column.id} style={{ width: column.width ?? 170 }} className="relative min-w-[130px]">
+                    <button
+                      className="flex w-full items-center justify-between gap-2 text-left"
+                      onClick={() => onSort(column.id)}
+                    >
+                      <span className="truncate">{column.title}</span>
+                      {isSorted && (
+                        <span className="text-[10px] text-mamba-700">
+                          {sortState?.direction === "asc" ? "▲" : "▼"}
+                        </span>
+                      )}
+                    </button>
                     <div
                       className="absolute right-0 top-0 h-full w-1 cursor-col-resize bg-transparent hover:bg-mamba-200"
                       onMouseDown={(event) => {
                         event.preventDefault();
-                        event.stopPropagation();
                         onResizeStart(column.id, event.clientX, column.width ?? 170);
                       }}
                     />
@@ -3308,7 +3164,6 @@ function KanbanView({
   columns,
   onCycleStatus,
   onUpdateValue,
-  onKanbanCrossLane,
   onReorderItems,
   onCreateItemInLane,
   searchQuery,
@@ -3318,16 +3173,13 @@ function KanbanView({
   columns: Column[];
   onCycleStatus: (itemId: string, cv: ColumnValue) => void;
   onUpdateValue: (valueId: string, value: unknown) => void;
-  onKanbanCrossLane: (itemId: string, destinationLane: number) => void;
   onReorderItems: (itemId: string, sourceGroupId: string, destinationGroupId: string, destinationIndex: number) => void;
   onCreateItemInLane: (statusIndex: number) => void;
   searchQuery: string;
   onSelectItem: (itemId: string) => void;
 }) {
   const [laneOrder, setLaneOrder] = useState<Record<number, string[]>>({});
-  const dragInFlight = useRef(false);
   const statusColumn = columns.find((column) => column.columnType === "STATUS");
-
 
   if (!statusColumn) {
     return (
@@ -3356,7 +3208,6 @@ function KanbanView({
   }
 
   useEffect(() => {
-    if (dragInFlight.current) return;
     setLaneOrder((prev) => {
       const next: Record<number, string[]> = {};
       for (const lane of lanes) {
@@ -3382,8 +3233,6 @@ function KanbanView({
 
   const handleDragEnd = (result: DropResult) => {
     if (!result.destination) return;
-    dragInFlight.current = true;
-    setTimeout(() => { dragInFlight.current = false; }, 2000);
     const destination = result.destination;
 
     const sourceLane = Number(result.source.droppableId);
@@ -3395,7 +3244,6 @@ function KanbanView({
     if (!draggedItem) return;
     if (sourceLane === destinationLane && result.source.index === result.destination.index) return;
 
-    // 1. Update lane order for visual feedback
     setLaneOrder((prev) => {
       const source = [...(prev[sourceLane] ?? orderedLanes[sourceLane].items.map((entry) => entry.id))];
       const destinationIds = sourceLane === destinationLane
@@ -3404,17 +3252,28 @@ function KanbanView({
       const [movedId] = source.splice(result.source.index, 1);
       if (!movedId) return prev;
       destinationIds.splice(destination.index, 0, movedId);
-      return { ...prev, [sourceLane]: source, [destinationLane]: destinationIds };
+      return {
+        ...prev,
+        [sourceLane]: source,
+        [destinationLane]: destinationIds,
+      };
     });
 
-    // 2. For cross-lane: update status value via parent callback
-    // (parent has access to groups state with populated columnValues)
-    if (sourceLane !== destinationLane) {
-      onKanbanCrossLane(draggedItem.id, destinationLane);
-    }
-
-    // 3. Persist position change to server
-    onReorderItems(draggedItem.id, draggedItem.groupId, draggedItem.groupId, destination.index);
+if (sourceLane === destinationLane) {
+// Same-lane reorder: persist position change within the group
+onReorderItems(draggedItem.id, draggedItem.groupId, draggedItem.groupId, destination.index);
+} else {
+// Cross-lane move: only update the status value.
+// Do NOT call onReorderItems - destination.index is a lane position,
+// not a group position, and the concurrent PATCH /api/items +
+// PATCH /api/columns/values race causes the socket broadcast from
+// the item PATCH to overwrite the optimistic status change, snapping
+// the item back to the original lane.
+const statusValue = draggedItem.columnValues.find((value) => value.column.id === statusColumn.id);
+if (!statusValue) return;
+if (typeof statusValue.value === 'number' && statusValue.value === destinationLane) return;
+onUpdateValue(statusValue.id, destinationLane);
+}
   };
 
   return (
