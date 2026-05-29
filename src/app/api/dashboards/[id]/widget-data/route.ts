@@ -151,29 +151,106 @@ export async function GET(
         case "CHART_BAR":
         case "CHART_LINE":
         case "CHART_PIE": {
-          // Generic chart — group items by a configured column
           const groupByColumnId = config.columnId as string | undefined;
+          const seriesColumnId = config.seriesColumnId as string | undefined;
+          const comparePeriod = config.comparePeriod as string | undefined;
+          
           if (!groupByColumnId) {
             results[widget.id] = { error: "No columnId configured" };
             break;
           }
+
           const values = await prisma.columnValue.findMany({
             where: {
               columnId: groupByColumnId,
               item: { boardId: { in: widgetBoardIds } },
             },
-            select: { value: true },
+            select: {
+              value: true,
+              itemId: true,
+              item: { select: { createdAt: true, updatedAt: true } },
+            },
           });
-          const grouped: Record<string, number> = {};
+
+          // Single series (original behavior)
+          if (!seriesColumnId && !comparePeriod) {
+            const grouped: Record<string, number> = {};
+            for (const v of values) {
+              const val = v.value as Record<string, unknown> | null;
+              const label = String(val?.["label"] ?? val?.["index"] ?? "empty");
+              grouped[label] = (grouped[label] || 0) + 1;
+            }
+            results[widget.id] = {
+              chartType: widget.type === "CHART_BAR" ? "bar" : widget.type === "CHART_LINE" ? "line" : "pie",
+              labels: Object.keys(grouped),
+              data: Object.values(grouped),
+            };
+            break;
+          }
+
+          // Multi-series: group by second column
+          const seriesValues = seriesColumnId
+            ? await prisma.columnValue.findMany({
+                where: {
+                  columnId: seriesColumnId,
+                  itemId: { in: values.map((v) => v.itemId).filter((id): id is string => id !== null) },
+                },
+                select: { value: true, itemId: true },
+              })
+            : [];
+
+          const seriesByItem = new Map<string, string>();
+          for (const sv of seriesValues) {
+            const val = sv.value as Record<string, unknown> | null;
+            if (sv.itemId) seriesByItem.set(sv.itemId, String(val?.["label"] ?? val?.["index"] ?? "Unknown"));
+          }
+
+          // Build series data
+          const seriesMap: Record<string, Record<string, number>> = {};
+          const allLabels = new Set<string>();
+
           for (const v of values) {
             const val = v.value as Record<string, unknown> | null;
             const label = String(val?.["label"] ?? val?.["index"] ?? "empty");
-            grouped[label] = (grouped[label] || 0) + 1;
+            const seriesName = seriesByItem.get(v.itemId ?? "") || "Current";
+            allLabels.add(label);
+            if (!seriesMap[seriesName]) seriesMap[seriesName] = {};
+            seriesMap[seriesName][label] = (seriesMap[seriesName][label] || 0) + 1;
           }
+
+          // Compare period support
+          if (comparePeriod && comparePeriod !== "none") {
+            const now = new Date();
+            const periods: Record<string, Date> = {
+              "last_week": new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000),
+              "last_month": new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000),
+              "last_quarter": new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000),
+            };
+            const cutoff = periods[comparePeriod];
+            if (cutoff) {
+              const previousValues = values.filter((v) => v.item && v.item.createdAt < cutoff);
+              const previousGrouped: Record<string, number> = {};
+              for (const v of previousValues) {
+                const val = v.value as Record<string, unknown> | null;
+                const label = String(val?.["label"] ?? val?.["index"] ?? "empty");
+                previousGrouped[label] = (previousGrouped[label] || 0) + 1;
+              }
+              seriesMap["Previous (" + comparePeriod + ")"] = previousGrouped;
+              Object.keys(previousGrouped).forEach((l) => allLabels.add(l));
+            }
+          }
+
+          const labels = Array.from(allLabels);
+          const datasets = Object.entries(seriesMap).map(([name, data]) => ({
+            label: name,
+            data: labels.map((l) => data[l] || 0),
+          }));
+
           results[widget.id] = {
             chartType: widget.type === "CHART_BAR" ? "bar" : widget.type === "CHART_LINE" ? "line" : "pie",
-            labels: Object.keys(grouped),
-            data: Object.values(grouped),
+            labels,
+            datasets,
+            multiSeries: true,
           };
           break;
         }
