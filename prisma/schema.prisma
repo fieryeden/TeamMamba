@@ -52,6 +52,8 @@ model User {
   docEmbeds          DocEmbed[]        @relation("DocEmbedCreator")
   integrationConfigs IntegrationConfig[] @relation("IntegrationConfigCreator")
   pushSubscriptions  PushSubscription[]
+  createdPolls       Poll[]             @relation("PollCreator")
+  pollVotes          PollVote[]
 
   @@map("users")
 }
@@ -155,6 +157,8 @@ model Board {
   emailAddress BoardEmailAddress?
 
   auditLogs   AuditLog[]
+  polls       Poll[]
+
   @@map("boards")
 }
 
@@ -303,6 +307,7 @@ model Item {
   dependenciesTo   Dependency[] @relation("DependencyTo")
   connectSourceLinks ConnectColumn[] @relation("ConnectSource")
   connectTargetLinks ConnectColumn[] @relation("ConnectTarget")
+  polls            Poll[]
 
   @@map("items")
 }
@@ -349,6 +354,39 @@ model Subitem {
   columnValues ColumnValue[]
 
   @@map("subitems")
+}
+
+model Poll {
+  id          String     @id @default(uuid())
+  boardId     String
+  itemId      String?
+  creatorId   String
+  question    String
+  options     String[]
+  isAnonymous Boolean    @default(false)
+  isMultiSelect Boolean  @default(false)
+  closesAt    DateTime?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  board       Board      @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  item        Item?      @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  creator     User       @relation("PollCreator", fields: [creatorId], references: [id], onDelete: Cascade)
+  votes       PollVote[]
+
+  @@map("polls")
+}
+
+model PollVote {
+  id        String   @id @default(uuid())
+  pollId    String
+  userId    String
+  optionIdx Int
+  createdAt DateTime @default(now())
+  poll      Poll     @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([pollId, userId, optionIdx])
+  @@map("poll_votes")
 }
 
 model ColumnValue {

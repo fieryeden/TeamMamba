@@ -28,6 +28,8 @@ import {
   Shield,
   Sparkles,
   Trash2,
+  MessageSquare,
+  BarChart3,
   X,
   Zap,
 } from "lucide-react";
@@ -59,6 +61,8 @@ import { GanttView } from "@/components/boards/gantt-view";
 import { AIPanel } from "@/components/ai/ai-panel";
 import { ColumnPermissionsDialog } from "@/components/columns/column-permissions-dialog";
 import { EmailIngestionSettings } from "@/components/boards/email-ingestion-settings";
+import { PollCard } from "@/components/boards/poll-card";
+import { PollModal } from "@/components/boards/poll-modal";
 
 interface ColumnValue {
   id: string;
@@ -364,6 +368,9 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
   const [mondayImportFile, setMondayImportFile] = useState<File | null>(null);
   const [mondayImportLoading, setMondayImportLoading] = useState(false);
   const [mondayImportSummary, setMondayImportSummary] = useState<string | null>(null);
+  const [polls, setPolls] = useState<Array<any>>([]);
+  const [showPollModal, setShowPollModal] = useState(false);
+  const [pollsLoaded, setPollsLoaded] = useState(false);
 
   const resizeRef = useRef<{ columnId: string; startX: number; startWidth: number } | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
@@ -393,6 +400,81 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
 
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
 
+  // ─── Poll handlers ───────────────────────────────────
+  const handleCreatePoll = useCallback(async (data: {
+    boardId: string; itemId?: string; question: string; options: string[];
+    isAnonymous: boolean; isMultiSelect: boolean; closesAt: string | null;
+  }) => {
+    try {
+      const res = await fetch('/api/polls', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (res.ok) {
+        const { poll } = await res.json();
+        setPolls((prev: Array<any>) => [poll, ...prev]);
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  const handleDeletePoll = useCallback(async (pollId: string) => {
+    try {
+      const res = await fetch(`/api/polls/${pollId}`, { method: 'DELETE' });
+      if (res.ok) {
+        setPolls((prev: Array<any>) => prev.filter((p: any) => p.id !== pollId));
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  const handleVote = useCallback(async (pollId: string, optionIdx: number) => {
+    try {
+      const res = await fetch(`/api/polls/${pollId}/vote`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ optionIdx }),
+      });
+      if (res.ok) {
+        // Reload the poll to get updated votes
+        const pollRes = await fetch(`/api/polls?boardId=${board.id}`);
+        if (pollRes.ok) {
+          const data = await pollRes.json();
+          setPolls(data.polls || []);
+        }
+      }
+    } catch { /* ignore */ }
+  }, [board.id]);
+
+  const handleRemoveVote = useCallback(async (pollId: string, optionIdx: number) => {
+    try {
+      const res = await fetch(`/api/polls/${pollId}/vote?optionIdx=${optionIdx}`, {
+        method: 'DELETE',
+      });
+      if (res.ok) {
+        const pollRes = await fetch(`/api/polls?boardId=${board.id}`);
+        if (pollRes.ok) {
+          const data = await pollRes.json();
+          setPolls(data.polls || []);
+        }
+      }
+    } catch { /* ignore */ }
+  }, [board.id]);
+
+  // ─── Load polls ──────────────────────────────────────
+  useEffect(() => {
+    if (pollsLoaded) return;
+    const loadPolls = async () => {
+      try {
+        const res = await fetch(`/api/polls?boardId=${board.id}`);
+        if (res.ok) {
+          const data = await res.json();
+          setPolls(data.polls || []);
+          setPollsLoaded(true);
+        }
+      } catch { /* ignore */ }
+    };
+    loadPolls();
+  }, [board.id, pollsLoaded]);
 
   // ─── Real-time socket listeners ──────────────────────
   useBoardSocket(board.id, {
@@ -1742,6 +1824,14 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
             >
               <Sparkles className="mr-1 h-3.5 w-3.5" /> AI
             </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8"
+              onClick={() => setShowPollModal(true)}
+            >
+              <span className="mr-1">📊</span> Poll
+            </Button>
             <input
               ref={importInputRef}
               type="file"
@@ -2091,6 +2181,40 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
  {toastMessage && (
    <div className="fixed right-4 top-4 z-[70] rounded-md border bg-card px-3 py-2 text-xs shadow-lg">
      {toastMessage}
+   </div>
+ )}
+ {showPollModal && (
+   <PollModal
+     boardId={board.id}
+     open={showPollModal}
+     onClose={() => setShowPollModal(false)}
+     onCreate={handleCreatePoll}
+   />
+ )}
+ {/* Polls panel */}
+ {polls.length > 0 && (
+   <div className="border-t bg-muted/20 px-4 py-3">
+     <details open={polls.length <= 3}>
+       <summary className="cursor-pointer text-xs font-medium text-muted-foreground hover:text-foreground">
+         📊 Polls ({polls.length})
+       </summary>
+       <div className="mt-2 space-y-2 max-w-md">
+         {polls.slice(0, 5).map((poll: any) => (
+           <PollCard
+             key={poll.id}
+             poll={poll}
+             currentUserId={user.id}
+             onVote={handleVote}
+             onRemoveVote={handleRemoveVote}
+             onDelete={handleDeletePoll}
+             isCreator={poll.creatorId === user.id}
+           />
+         ))}
+         {polls.length > 5 && (
+           <p className="text-xs text-muted-foreground">+{polls.length - 5} more polls</p>
+         )}
+       </div>
+     </details>
    </div>
  )}
   </>
