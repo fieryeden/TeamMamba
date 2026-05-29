@@ -377,6 +377,12 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
     });
   }, []);
   const clearSelection = useCallback(() => setSelectedItemIds(new Set()), []);
+
+  // Bulk column value edit state
+  const [selectedBulkColumn, setSelectedBulkColumn] = useState<{ id: string; type: string; title?: string; config?: unknown } | null>(null);
+  const [showBulkValueEditor, setShowBulkValueEditor] = useState(false);
+  const [bulkEditValue, setBulkEditValue] = useState<string>("");
+
   const selectAll = useCallback((allItemIds: string[]) => {
     setSelectedItemIds((prev) => {
       const allSelected = allItemIds.every((id) => prev.has(id));
@@ -556,6 +562,48 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
     setSelectedItemIds(new Set());
     setGroups((prev) => prev.map((g) => ({ ...g, items: g.items.filter((i) => !selectedItemIds.has(i.id)) })));
   }, [selectedItemIds, setGroups]);
+
+  const handleBulkColumnEdit = useCallback(async () => {
+    if (!selectedBulkColumn || selectedItemIds.size === 0) return;
+    const col = columns.find((c) => c.id === selectedBulkColumn.id);
+    if (!col) return;
+
+    let parsedValue: unknown = bulkEditValue;
+    if (col.columnType === "NUMBER") {
+      const num = Number(bulkEditValue);
+      parsedValue = Number.isFinite(num) ? num : null;
+    } else if (col.columnType === "STATUS") {
+      const idx = Number(bulkEditValue);
+      const labels = (col.config as { labels?: string[] } | null)?.labels ?? [];
+      parsedValue = Number.isFinite(idx) ? { index: idx, label: labels[idx] ?? String(idx) } : null;
+    }
+
+    await Promise.all(
+      Array.from(selectedItemIds).map(async (itemId) => {
+        const item = allItems.find((i) => i.id === itemId);
+        if (!item) return;
+        const cv = item.columnValues.find((v) => v.column.id === selectedBulkColumn.id);
+        if (cv) {
+          await fetch(`/api/columns/values/${cv.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ value: parsedValue }),
+          });
+        } else {
+          await fetch(`/api/columns/values`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ itemId, columnId: selectedBulkColumn.id, value: parsedValue }),
+          });
+        }
+      })
+    );
+    setShowBulkValueEditor(false);
+    setSelectedBulkColumn(null);
+    setBulkEditValue("");
+    clearSelection();
+  }, [selectedBulkColumn, selectedItemIds, bulkEditValue, columns, allItems, clearSelection]);
+
   // Global keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -1714,6 +1762,55 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
           </div>
         )}
       </div>
+
+      {/* Floating bulk edit toolbar */}
+      {selectedItemIds.size > 0 && (
+        <div className="border-b bg-muted/30 px-4 py-2">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-xs font-medium text-muted-foreground">
+              {selectedItemIds.size} selected
+            </span>
+            <div className="flex items-center gap-1">
+              <select
+                className="h-7 rounded-md border bg-background px-2 text-xs"
+                defaultValue=""
+                onChange={(e) => {
+                  if (!e.target.value) return;
+                  const [colId, colType] = e.target.value.split("::");
+                  const col = columns.find((c) => c.id === colId);
+                  if (!col) return;
+                  setSelectedBulkColumn({ id: colId, type: colType as string, title: col.title, config: col.config });
+                  setBulkEditValue("");
+                  setShowBulkValueEditor(true);
+                  e.target.value = "";
+                }}
+              >
+                <option value="" disabled>Edit column...</option>
+                {columns.map((col) => (
+                  <option key={col.id} value={`${col.id}::${col.columnType}`}>
+                    {col.title}
+                  </option>
+                ))}
+              </select>
+              <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={handleBulkDelete}>
+                <Trash2 className="mr-1 h-3 w-3" /> Delete
+              </Button>
+              <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={clearSelection}>
+                Clear
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showBulkValueEditor && selectedBulkColumn && (
+        <BulkValueEditor
+          column={{ id: selectedBulkColumn.id, title: selectedBulkColumn.title ?? "", type: selectedBulkColumn.type, config: selectedBulkColumn.config }}
+          selectedCount={selectedItemIds.size}
+          onClose={() => { setShowBulkValueEditor(false); setSelectedBulkColumn(null); }}
+          onApply={(val) => { setBulkEditValue(val); handleBulkColumnEdit(); }}
+        />
+      )}
 
       <div className="flex-1 overflow-hidden">
         {viewMode === "TABLE" && (
@@ -4482,6 +4579,72 @@ function ItemDetailPanel({
         </>
       ) : null}
     </aside>
+  );
+}
+
+function BulkValueEditor({ column, selectedCount, onClose, onApply }: {
+  column: { id: string; title: string; type: string; config: unknown } | null;
+  selectedCount: number;
+  onClose: () => void;
+  onApply: (value: string) => void;
+}) {
+  const [value, setValue] = useState("");
+  if (!column) return null;
+
+  const handleSubmit = () => {
+    onApply(value);
+  };
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Edit "{column.title}" for {selectedCount} items</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 py-2">
+          {column.type === "STATUS" ? (
+            <div className="space-y-2">
+              <label className="text-xs text-muted-foreground">Select status</label>
+              <select
+                className="h-8 w-full rounded-md border bg-background px-2 text-sm"
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+              >
+                <option value="" disabled>Choose status...</option>
+                {((column.config as { labels?: string[] } | null)?.labels ?? []).map((label, i) => (
+                  <option key={i} value={String(i)}>{label}</option>
+                ))}
+              </select>
+            </div>
+          ) : column.type === "NUMBER" ? (
+            <div className="space-y-2">
+              <label className="text-xs text-muted-foreground">Enter number</label>
+              <Input
+                type="number"
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                placeholder="0"
+              />
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <label className="text-xs text-muted-foreground">Enter value</label>
+              <Input
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                placeholder="Value..."
+              />
+            </div>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button className="bg-mamba-600 hover:bg-mamba-700" onClick={handleSubmit}>
+            Apply to {selectedCount} items
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
