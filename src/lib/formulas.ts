@@ -650,6 +650,176 @@ function evaluate(node: ExprNode, context: FormulaEvaluationContext): unknown {
       return filteredMetrics.reduce((acc, value) => acc + value, 0) / filteredMetrics.length;
     }
 
+    // Text functions
+    if (name === "CONTAINS") {
+      const [haystack, needle] = evaluatedArgs;
+      return toString(haystack).includes(toString(needle));
+    }
+    if (name === "REPLACE") {
+      const [input, start, count, replacement] = evaluatedArgs;
+      const text = toString(input);
+      const s = Math.max(0, Math.floor(toNumber(start)) - 1);
+      const c = Math.max(0, Math.floor(toNumber(count)));
+      return text.slice(0, s) + toString(replacement) + text.slice(s + c);
+    }
+    if (name === "PROPER") {
+      return toString(evaluatedArgs[0]).replace(/\b\w/g, (c) => c.toUpperCase());
+    }
+    if (name === "EXACT") {
+      return toString(evaluatedArgs[0]) === toString(evaluatedArgs[1]);
+    }
+    if (name === "REPT") {
+      return toString(evaluatedArgs[0]).repeat(Math.max(0, Math.floor(toNumber(evaluatedArgs[1]))));
+    }
+    if (name === "CHAR") {
+      return String.fromCharCode(Math.floor(toNumber(evaluatedArgs[0])));
+    }
+    if (name === "CODE") {
+      return toString(evaluatedArgs[0]).charCodeAt(0) || 0;
+    }
+    if (name === "TEXTJOIN") {
+      const delimiter = toString(evaluatedArgs[0]);
+      const ignoreEmpty = evaluatedArgs.length > 1 ? isTruthy(evaluatedArgs[1]) : false;
+      const items = evaluatedArgs.slice(2);
+      return items.filter((v) => !ignoreEmpty || (v !== null && v !== undefined && toString(v).length > 0)).map(toString).join(delimiter);
+    }
+    if (name === "SPLIT") {
+      const [input, delimiter] = evaluatedArgs;
+      return toString(input).split(toString(delimiter));
+    }
+
+    // Error handling
+    if (name === "ISBLANK") {
+      const v = evaluatedArgs[0];
+      return v === null || v === undefined || toString(v).trim() === "";
+    }
+    if (name === "ISNUMBER") {
+      return typeof evaluatedArgs[0] === "number" && Number.isFinite(evaluatedArgs[0]);
+    }
+    if (name === "ISERROR") {
+      return evaluatedArgs[0] instanceof Error;
+    }
+    if (name === "IFERROR") {
+      return evaluatedArgs[0] instanceof Error ? evaluatedArgs[1] : evaluatedArgs[0];
+    }
+
+    // Math functions
+    if (name === "SIGN") {
+      const n = toNumber(evaluatedArgs[0]);
+      return n > 0 ? 1 : n < 0 ? -1 : 0;
+    }
+    if (name === "EVEN") {
+      return Math.ceil(toNumber(evaluatedArgs[0]) / 2) * 2;
+    }
+    if (name === "ODD") {
+      const n = toNumber(evaluatedArgs[0]);
+      return Math.ceil(Math.abs(n) / 2) * 2 - (n >= 0 ? 1 : -1);
+    }
+    if (name === "RANDBETWEEN") {
+      const lo = Math.floor(toNumber(evaluatedArgs[0]));
+      const hi = Math.floor(toNumber(evaluatedArgs[1]));
+      return Math.floor(Math.random() * (hi - lo + 1)) + lo;
+    }
+    if (name === "ROUNDUP") {
+      const n = toNumber(evaluatedArgs[0]);
+      const d = Math.floor(toNumber(evaluatedArgs[1]) || 0);
+      const factor = Math.pow(10, d);
+      return Math.ceil(n * factor) / factor;
+    }
+    if (name === "ROUNDDOWN") {
+      const n = toNumber(evaluatedArgs[0]);
+      const d = Math.floor(toNumber(evaluatedArgs[1]) || 0);
+      const factor = Math.pow(10, d);
+      return Math.floor(n * factor) / factor;
+    }
+    if (name === "TRUNC") {
+      const n = toNumber(evaluatedArgs[0]);
+      const d = Math.floor(toNumber(evaluatedArgs[1]) || 0);
+      const factor = Math.pow(10, d);
+      return Math.trunc(n * factor) / factor;
+    }
+    if (name === "LN") return Math.log(toNumber(evaluatedArgs[0]));
+    if (name === "EXP") return Math.exp(toNumber(evaluatedArgs[0]));
+
+    // Statistical functions
+    if (name === "MEDIAN") {
+      const values = flatten(evaluatedArgs).map(toNumber).filter(Number.isFinite).sort((a, b) => a - b);
+      if (!values.length) return 0;
+      const mid = Math.floor(values.length / 2);
+      return values.length % 2 !== 0 ? values[mid] : (values[mid - 1] + values[mid]) / 2;
+    }
+    if (name === "LARGE") {
+      const values = flatten(evaluatedArgs).map(toNumber).filter(Number.isFinite).sort((a, b) => b - a);
+      const k = Math.max(1, Math.floor(toNumber(evaluatedArgs[evaluatedArgs.length - 1] || 1)));
+      return values[k - 1] || 0;
+    }
+    if (name === "SMALL") {
+      const values = flatten(evaluatedArgs).map(toNumber).filter(Number.isFinite).sort((a, b) => a - b);
+      const k = Math.max(1, Math.floor(toNumber(evaluatedArgs[evaluatedArgs.length - 1] || 1)));
+      return values[k - 1] || 0;
+    }
+    if (name === "STDEV") {
+      const values = flatten(evaluatedArgs).map(toNumber).filter(Number.isFinite);
+      if (values.length < 2) return 0;
+      const avg = values.reduce((s, v) => s + v, 0) / values.length;
+      const variance = values.reduce((s, v) => s + (v - avg) ** 2, 0) / (values.length - 1);
+      return Math.sqrt(variance);
+    }
+
+    // Lookup functions
+    if (name === "VLOOKUP") {
+      const lookupVal = evaluatedArgs[0];
+      const table = evaluatedArgs[1] as unknown[] | undefined;
+      const colIdx = Math.max(1, Math.floor(toNumber(evaluatedArgs[2])));
+      const exact = evaluatedArgs.length < 4 || isTruthy(evaluatedArgs[3]);
+      if (!table || !Array.isArray(table)) return "#REF!";
+      for (const row of table) {
+        if (Array.isArray(row)) {
+          if (exact ? compareValues(row[0], lookupVal) === 0 : toNumber(row[0]) <= toNumber(lookupVal)) {
+            return row[colIdx - 1] ?? "#N/A";
+          }
+        }
+      }
+      return "#N/A";
+    }
+    if (name === "INDEX") {
+      const table = evaluatedArgs[0] as unknown[] | undefined;
+      const rowIdx = Math.max(1, Math.floor(toNumber(evaluatedArgs[1]))) - 1;
+      const colIdx = evaluatedArgs.length > 2 ? Math.max(1, Math.floor(toNumber(evaluatedArgs[2]))) - 1 : 0;
+      if (!table || !Array.isArray(table[rowIdx])) return "#REF!";
+      return (table[rowIdx] as unknown[])[colIdx] ?? "#N/A";
+    }
+    if (name === "MATCH") {
+      const lookupVal = evaluatedArgs[0];
+      const range = (evaluatedArgs[1] as unknown[] || []).flat();
+      const matchType = Math.floor(toNumber(evaluatedArgs[2] || 0));
+      for (let i = 0; i < range.length; i++) {
+        if (matchType === 0 && compareValues(range[i], lookupVal) === 0) return i + 1;
+        if (matchType === -1 && toNumber(range[i]) >= toNumber(lookupVal)) return i + 1;
+        if (matchType === 1 && toNumber(range[i]) <= toNumber(lookupVal)) return i + 1;
+      }
+      return "#N/A";
+    }
+
+    // Array helpers
+    if (name === "UNIQUE") {
+      const values = flatten(evaluatedArgs).map(toString);
+      return [...new Set(values)];
+    }
+    if (name === "FILTER") {
+      const arr = (evaluatedArgs[0] as unknown[]) || [];
+      const include = (evaluatedArgs[1] as unknown[]) || [];
+      return arr.filter((_, i) => isTruthy(include[i]));
+    }
+    if (name === "SORT") {
+      const arr = [...((evaluatedArgs[0] as unknown[]) || [])];
+      return arr.sort((a, b) => {
+        const av = typeof a === 'number' && Number.isFinite(a) ? a : toString(a);
+        const bv = typeof b === 'number' && Number.isFinite(b) ? b : toString(b);
+        return av < bv ? -1 : av > bv ? 1 : 0;
+      });
+    }
+
     if (AGGREGATE_FUNCTIONS.has(name)) {
       const aggregateValues = flatten(
         node.args.map((arg, index) => getArgSeries(arg, evaluatedArgs[index], context))

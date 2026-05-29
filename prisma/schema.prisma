@@ -145,6 +145,7 @@ model Board {
   columns     BoardColumn[]
   groups      Group[]
   items       Item[]
+  sprints     Sprint[]
   members     BoardMember[]
   automations Automation[]
   views       BoardView[]
@@ -262,6 +263,7 @@ enum ColumnType {
   CONNECT
   MIRROR
   ROLLUP
+  STORY_POINTS
 }
 
 // ─── GROUPS & ITEMS ─────────────────────────────────────
@@ -305,6 +307,7 @@ model Item {
   docEmbeds  DocEmbed[]
 
   // Dependencies
+  sprintItems    SprintItem[]
   dependenciesFrom Dependency[] @relation("DependencyFrom")
   dependenciesTo   Dependency[] @relation("DependencyTo")
   connectSourceLinks ConnectColumn[] @relation("ConnectSource")
@@ -312,6 +315,47 @@ model Item {
   polls            Poll[]
 
   @@map("items")
+}
+
+model Sprint {
+  id          String        @id @default(uuid())
+  boardId     String
+  name        String
+  goal        String?
+  startDate   DateTime
+  endDate     DateTime
+  status      SprintStatus  @default(PLANNING)
+  velocity    Int?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  board       Board         @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  items       SprintItem[]
+  @@map("sprints")
+}
+
+model SprintItem {
+  id               String    @id @default(uuid())
+  sprintId         String
+  itemId           String
+  storyPoints      Int?
+  originalEstimate Int?
+  burnedPoints     Int       @default(0)
+  addedDuringSprint Boolean  @default(false)
+  completedAt      DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  sprint           Sprint   @relation(fields: [sprintId], references: [id], onDelete: Cascade)
+  item             Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@unique([sprintId, itemId])
+  @@map("sprint_items")
+}
+
+enum SprintStatus {
+  PLANNING
+  ACTIVE
+  COMPLETED
+  CANCELLED
 }
 
 model BoardEmailAddress {

@@ -63,6 +63,7 @@ import { ColumnPermissionsDialog } from "@/components/columns/column-permissions
 import { EmailIngestionSettings } from "@/components/boards/email-ingestion-settings";
 import { PollCard } from "@/components/boards/poll-card";
 import { PollModal } from "@/components/boards/poll-modal";
+import { SprintPanel } from "@/components/boards/sprint-panel";
 
 interface ColumnValue {
   id: string;
@@ -205,7 +206,7 @@ interface BoardClientProps {
   };
 }
 
-type ViewMode = "TABLE" | "KANBAN" | "CALENDAR" | "TIMELINE" | "GANTT";
+type ViewMode = "TABLE" | "KANBAN" | "CALENDAR" | "TIMELINE" | "GANTT" | "SPRINTS";
 type SortState = { columnId: string; direction: "asc" | "desc" } | null;
 type FilterOperator = "equals" | "not_equals" | "contains" | "is_empty" | "is_not_empty";
 type FilterLogic = "AND" | "OR";
@@ -357,6 +358,8 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
   const [filterLogic, setFilterLogic] = useState<FilterLogic>("AND");
   const [searchQuery, setSearchQuery] = useState("");
   const [showShareDialog, setShowShareDialog] = useState(false);
+  const [boardSprints, setBoardSprints] = useState<Array<any>>([]);
+  const [sprintsLoaded, setSprintsLoaded] = useState(false);
   const [shareUrl, setShareUrl] = useState("");
   const [shareExpiry, setShareExpiry] = useState("");
   const [shareLoading, setShareLoading] = useState(false);
@@ -475,6 +478,22 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
     };
     loadPolls();
   }, [board.id, pollsLoaded]);
+
+  // ─── Load sprints ──────────────────────────────────────
+  useEffect(() => {
+    if (sprintsLoaded) return;
+    const loadSprints = async () => {
+      try {
+        const res = await fetch(`/api/sprints?boardId=${board.id}`);
+        if (res.ok) {
+          const data = await res.json();
+          setBoardSprints(data.sprints || []);
+          setSprintsLoaded(true);
+        }
+      } catch { /* ignore */ }
+    };
+    loadSprints();
+  }, [board.id, sprintsLoaded]);
 
   // ─── Real-time socket listeners ──────────────────────
   useBoardSocket(board.id, {
@@ -1620,6 +1639,9 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
                 <TabsTrigger value="GANTT" className="px-2 text-xs">
                   <CalendarDays className="mr-1 h-3 w-3" /> Gantt
                 </TabsTrigger>
+                <TabsTrigger value="SPRINTS" className="px-2 text-xs">
+                  <span className="mr-1">🏃</span> Sprints
+                </TabsTrigger>
               </TabsList>
             </Tabs>
 
@@ -1978,6 +2000,18 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
             onUpdateValue={handleUpdateValue}
             onSelectItem={(itemId) => setSelectedItemId(itemId)}
           />
+        )}
+
+        {viewMode === "SPRINTS" && (
+          <div className="flex-1 overflow-auto p-4">
+            <SprintPanel
+              boardId={board.id}
+              sprints={boardSprints}
+              onRefresh={() => {
+                setSprintsLoaded(false);
+              }}
+            />
+          </div>
         )}
       </div>
 
