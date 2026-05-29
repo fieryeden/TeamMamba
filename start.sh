@@ -9,4 +9,4 @@ export JWT_SECRET="dev-secret-change-in-production"
 export PORT=3010
 export NEXT_PUBLIC_APP_URL=http://localhost:3010
 export NEXT_PUBLIC_SOCKET_URL=http://localhost:3010
-exec npx next start -p 3010
+exec npx tsx server.ts
