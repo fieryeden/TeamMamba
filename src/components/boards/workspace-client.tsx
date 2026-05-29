@@ -16,6 +16,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import { BroadcastModal } from "@/components/boards/broadcast-modal";
+import { WorkspaceGovernance } from "@/components/boards/workspace-governance";
 
 interface WorkspaceClientProps {
   workspace: {
@@ -177,6 +178,9 @@ export function WorkspaceClient({ workspace }: WorkspaceClientProps) {
           </div>
         </div>
       </div>
+
+      {/* Data Governance */}
+      <WorkspaceGovernance workspaceId={workspace.id} />
 
       {/* Boards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

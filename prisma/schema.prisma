@@ -99,6 +99,7 @@ model Workspace {
   color         String?
   logoUrl       String?
   customDomain  String?  @unique
+  dataRetentionPolicy Json?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   ownerId     String
@@ -139,6 +140,8 @@ model Board {
   boardKind   BoardKind @default(KANBAN)
   color       String?
   isTemplate  Boolean   @default(false)
+  autoArchiveDays  Int?
+  retentionDays   Int?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -292,6 +295,7 @@ model Item {
   color      String?
   icon       String?
   position   Int
+  archivedAt   DateTime?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
   board      Board    @relation(fields: [boardId], references: [id], onDelete: Cascade)
@@ -394,6 +398,7 @@ model Subitem {
   parentId     String
   name         String
   position     Int
+  archivedAt   DateTime?
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
   parent       Item         @relation(fields: [parentId], references: [id], onDelete: Cascade)
