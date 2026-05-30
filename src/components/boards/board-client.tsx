@@ -908,6 +908,25 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
   }, []);
 
   const handleUpdateValue = useCallback(async (valueId: string, value: unknown) => {
+    // Handle creating new column values
+    if (valueId.startsWith("create:")) {
+      const parts = valueId.split(":");
+      const itemId = parts[1];
+      const columnId = parts[2];
+      if (!itemId || !columnId) return;
+      patchColumnValueInState(valueId, value);
+      try {
+        await fetch("/api/columns/values", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ itemId, columnId, value }),
+        });
+      } catch (err) {
+        console.error("Failed to create column value:", err);
+      }
+      return;
+    }
+
     let oldValue: unknown = undefined;
     setGroups((prev) => {
       for (const g of prev) {
@@ -4663,21 +4682,20 @@ function ItemDetailPanel({
               <h3 className="text-sm font-semibold">Column Values</h3>
               {columns.map((column) => {
                 const cv = item.columnValues.find((value) => value.column.id === column.id);
+                const emptyCv = cv ?? { id: `new-${column.id}`, column, value: null, itemId: item.id };
                 return (
                   <div key={column.id} className="rounded-md border p-2">
                     <p className="mb-1 text-xs font-medium text-muted-foreground">
                       {column.title} ({formatColumnLabel(column.columnType)})
                     </p>
-                    {!cv && <p className="text-xs text-muted-foreground">No value</p>}
-                    {cv && (
-                      <DetailValueEditor
-                        itemId={item.id}
-                        column={column}
-                        cv={cv}
-                        onUpdateValue={onUpdateValue}
-                        onUploadFile={onUploadFile}
-                      />
-                    )}
+                    <DetailValueEditor
+                      itemId={item.id}
+                      column={column}
+                      cv={emptyCv}
+                      isNew={!cv}
+                      onUpdateValue={onUpdateValue}
+                      onUploadFile={onUploadFile}
+                    />
                   </div>
                 );
               })}
@@ -4968,22 +4986,32 @@ function DetailValueEditor({
   itemId,
   column,
   cv,
+  isNew,
   onUpdateValue,
   onUploadFile,
 }: {
   itemId: string;
   column: Column;
   cv: ColumnValue;
+  isNew?: boolean;
   onUpdateValue: (valueId: string, value: unknown) => void;
   onUploadFile: (itemId: string, columnId: string, file: File) => void;
 }) {
+  const handleChange = (value: unknown) => {
+    if (isNew && value != null) {
+      // Create a new column value
+      onUpdateValue(`create:${itemId}:${column.id}`, value);
+      return;
+    }
+    onUpdateValue(cv.id, value);
+  };
   if (column.columnType === "STATUS") {
     const { labels } = getStatusMeta(cv.column);
     const currentValue = typeof cv.value === "number" ? cv.value : 0;
     return (
       <select
         value={currentValue}
-        onChange={(event) => onUpdateValue(cv.id, Number(event.target.value))}
+        onChange={(event) => handleChange(Number(event.target.value))}
         className="h-8 w-full rounded border px-2 text-sm"
       >
         {labels.map((label, index) => (
@@ -5000,7 +5028,7 @@ function DetailValueEditor({
       <Input
         type="date"
         defaultValue={cv.value ? new Date(cv.value as string).toISOString().slice(0, 10) : ""}
-        onChange={(event) => onUpdateValue(cv.id, event.target.value || null)}
+        onChange={(event) => handleChange(event.target.value || null)}
         className="h-8"
       />
     );
@@ -5011,7 +5039,7 @@ function DetailValueEditor({
       <Input
         type="number"
         defaultValue={cv.value != null ? String(cv.value) : ""}
-        onBlur={(event) => onUpdateValue(cv.id, event.target.value === "" ? null : Number(event.target.value))}
+        onBlur={(event) => handleChange(event.target.value === "" ? null : Number(event.target.value))}
         className="h-8"
       />
     );
@@ -5023,7 +5051,7 @@ function DetailValueEditor({
         <input
           type="checkbox"
           checked={Boolean(cv.value)}
-          onChange={(event) => onUpdateValue(cv.id, event.target.checked)}
+          onChange={(event) => handleChange(event.target.checked)}
           className="h-4 w-4"
         />
         Done
@@ -5038,7 +5066,7 @@ function DetailValueEditor({
         min={0}
         max={100}
         defaultValue={cv.value != null ? String(cv.value) : ""}
-        onBlur={(event) => onUpdateValue(cv.id, event.target.value === "" ? null : Number(event.target.value))}
+        onBlur={(event) => handleChange(event.target.value === "" ? null : Number(event.target.value))}
         className="h-8"
       />
     );
@@ -5169,7 +5197,7 @@ function DetailValueEditor({
     <Input
       type="text"
       defaultValue={(cv.value as string) ?? ""}
-      onBlur={(event) => onUpdateValue(cv.id, event.target.value)}
+      onBlur={(event) => handleChange(event.target.value)}
       className="h-8"
     />
   );
