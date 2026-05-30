@@ -102,6 +102,7 @@ export function GanttView({
   columns: Column[];
   onUpdateValue: (valueId: string, value: unknown) => void;
   onSelectItem?: (itemId: string) => void;
+  onCreateItemInLane?: (groupId: string, name: string, startDate: Date, endDate: Date) => Promise<void>;
 }) {
   const [zoom, setZoom] = useState<"day" | "week" | "month">("week");
   const [dependencies, setDependencies] = useState<Dependency[]>([]);

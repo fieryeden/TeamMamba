@@ -1999,6 +1999,36 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
             columns={columns}
             onUpdateValue={handleUpdateValue}
             onSelectItem={(itemId) => setSelectedItemId(itemId)}
+            onCreateItemInLane={async (groupId, name, startDate, endDate) => {
+              const res = await fetch("/api/items", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ boardId: board.id, groupId, name }),
+              });
+              if (res.ok) {
+                const { item } = await res.json();
+                if (startDate && endDate) {
+                  const dateCol = columns.find((c) => c.columnType === "DATE" || c.columnType === "TIMELINE");
+                  if (dateCol) {
+                    await fetch(`/api/columns/values`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        itemId: item.id,
+                        columnId: dateCol.id,
+                        value: { start: startDate.toISOString(), end: endDate.toISOString() },
+                      }),
+                    });
+                  }
+                }
+                // Refresh groups
+                const boardRes = await fetch(`/api/boards/${board.id}`);
+                if (boardRes.ok) {
+                  const data = await boardRes.json();
+                  setGroups(data.board.groups);
+                }
+              }
+            }}
           />
         )}
 
