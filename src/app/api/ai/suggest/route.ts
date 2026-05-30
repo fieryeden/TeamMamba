@@ -217,7 +217,7 @@ export async function POST(req: NextRequest) {
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const body = await req.json();
-    const { boardId, itemId, action } = body as { boardId?: string; itemId?: string; action?: AISuggestAction };
+    const { boardId, itemId, action, provider, model } = body as { boardId?: string; itemId?: string; action?: AISuggestAction; provider?: string; model?: string };
 
     if (!boardId) return NextResponse.json({ error: "boardId required" }, { status: 400 });
 
@@ -282,7 +282,7 @@ export async function POST(req: NextRequest) {
             "Task: suggest exactly 3 assignees based on balanced workload and board context.",
             "Return JSON: {\"suggestions\":[{\"userId\":string,\"name\":string,\"itemCount\":number,\"reason\":string}]}",
           ].join("\n\n"),
-          { temperature: 0.2, maxOutputTokens: 500 }
+          { temperature: 0.2, maxOutputTokens: 500, model: model, provider: provider as any }
         );
 
         const suggestions = llm.data?.suggestions
@@ -315,7 +315,7 @@ export async function POST(req: NextRequest) {
             "Pick one concise priority label and confidence.",
             "Return JSON: {\"suggestion\":string,\"confidence\":number}",
           ].join("\n\n"),
-          { temperature: 0.1, maxOutputTokens: 200 }
+          { temperature: 0.1, maxOutputTokens: 200, model: model, provider: provider as any }
         );
 
         if (llm.fallback || !llm.data?.suggestion) {
@@ -338,7 +338,7 @@ export async function POST(req: NextRequest) {
             `Current status: ${fallbackResult.currentStatus ?? "No Status"}`,
             "Return JSON: {\"suggestion\":string,\"confidence\":number,\"currentStatus\":string|null}",
           ].join("\n\n"),
-          { temperature: 0.2, maxOutputTokens: 220 }
+          { temperature: 0.2, maxOutputTokens: 220, model: model, provider: provider as any }
         );
 
         if (llm.fallback || !llm.data?.suggestion) {
@@ -366,7 +366,7 @@ export async function POST(req: NextRequest) {
             `Item: ${item.name}`,
             "Return JSON: {\"suggestion\":string|null,\"groupId\":string|null,\"confidence\":number,\"alternatives\":[{\"groupId\":string,\"groupName\":string,\"score\":number,\"itemCount\":number}]}",
           ].join("\n\n"),
-          { temperature: 0.2, maxOutputTokens: 420 }
+          { temperature: 0.2, maxOutputTokens: 420, model: model, provider: provider as any }
         );
 
         if (llm.fallback || !llm.data) {
@@ -403,7 +403,7 @@ export async function POST(req: NextRequest) {
           `Board context:\n${boardContext.summary}`,
           "Return JSON: {\"totalItems\":number,\"statusBreakdown\":Record<string,number>,\"unassignedItems\":number,\"overdueItems\":number,\"healthScore\":number}",
         ].join("\n\n"),
-        { temperature: 0.2, maxOutputTokens: 350 }
+        { temperature: 0.2, maxOutputTokens: 350, model: model, provider: provider as any }
       );
 
       if (llm.fallback || !llm.data) {

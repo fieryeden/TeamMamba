@@ -15,7 +15,8 @@ export async function POST(req: NextRequest) {
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const body = await req.json();
-    const { boardId } = body as { boardId?: string };
+    const { boardId, model } = body as { boardId?: string; model?: string };
+    const reqProvider = (body as any)?.provider as string | undefined;
     if (!boardId) return NextResponse.json({ error: "boardId required" }, { status: 400 });
 
     const membership = await prisma.boardMember.findFirst({ where: { boardId, userId: user.id } });
@@ -56,7 +57,7 @@ export async function POST(req: NextRequest) {
           `Metrics JSON:\n${JSON.stringify(metrics)}`,
           "Write 3-5 sentences with progress, blockers, and next focus. No markdown bullets.",
         ].join("\n\n"),
-        { temperature: 0.2, maxOutputTokens: 350 }
+        { temperature: 0.2, maxOutputTokens: 350, model: model, provider: reqProvider as any }
       );
 
       provider = llm.provider;

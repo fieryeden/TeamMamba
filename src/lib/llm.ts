@@ -3,6 +3,7 @@ const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL ?? "claude-3-5-sonnet-latest
 
 export interface LLMChatOptions {
   model?: string;
+  provider?: "openai" | "anthropic";
   temperature?: number;
   maxOutputTokens?: number;
   maxInputTokens?: number;
@@ -183,7 +184,12 @@ export async function chat(
   userPrompt: string,
   options: LLMChatOptions = {}
 ): Promise<LLMChatResult> {
-  const selected = getProvider();
+  const envProvider = getProvider();
+  const selected = options.provider
+    ? options.provider === "openai"
+      ? { provider: "openai" as const, key: process.env.OPENAI_API_KEY ?? "", model: OPENAI_MODEL }
+      : { provider: "anthropic" as const, key: process.env.ANTHROPIC_API_KEY ?? "", model: ANTHROPIC_MODEL }
+    : envProvider;
   const prompt = truncatePrompt(systemPrompt, userPrompt, options.maxInputTokens ?? 9000);
 
   if (selected.provider === "none") {

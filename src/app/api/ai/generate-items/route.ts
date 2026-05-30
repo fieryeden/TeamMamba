@@ -73,7 +73,7 @@ export async function POST(req: NextRequest) {
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const body = await req.json();
-    const { boardId, description, groupId } = body as { boardId?: string; description?: string; groupId?: string };
+    const { boardId, description, groupId, provider, model } = body as { boardId?: string; description?: string; groupId?: string; provider?: string; model?: string };
 
     if (!boardId || !description?.trim()) {
       return NextResponse.json({ error: "boardId and description required" }, { status: 400 });
@@ -105,7 +105,7 @@ export async function POST(req: NextRequest) {
           "Extract clear items. Keep names concise and specific.",
           "Return JSON: {\"items\":[{\"name\":string,\"priority\"?:string,\"groupId\"?:string}]}",
         ].join("\n\n"),
-        { temperature: 0.2, maxOutputTokens: 900 }
+        { temperature: 0.2, maxOutputTokens: 900, model: model, provider: provider as any }
       );
 
       if (!llm.fallback) {

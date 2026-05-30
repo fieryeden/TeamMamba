@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Sparkles, Loader2, BarChart3, Wand2, ListChecks, MessageSquare, Send } from "lucide-react";
+import { Sparkles, Loader2, BarChart3, Wand2, ListChecks, MessageSquare, Send, Settings, ChevronDown } from "lucide-react";
 
 interface AIPanelProps {
   boardId: string;
@@ -44,9 +44,15 @@ export function AIPanel({ boardId, itemId, onClose }: AIPanelProps) {
   const [error, setError] = useState<string | null>(null);
 
   const [suggestAction, setSuggestAction] = useState("assign");
+  const [suggestItemId, setSuggestItemId] = useState<string | undefined>(itemId);
   const [genDescription, setGenDescription] = useState("");
 
   const [llmConfigured, setLlmConfigured] = useState(false);
+  const [aiProvider, setAiProvider] = useState<string>("auto");
+  const [aiModel, setAiModel] = useState<string>("");
+  const [showModelSettings, setShowModelSettings] = useState(false);
+  const [boardItems, setBoardItems] = useState<Array<{ id: string; name: string }>>([]);
+  const [itemsLoading, setItemsLoading] = useState(false);
   const [statusLoading, setStatusLoading] = useState(true);
 
   const [chatInput, setChatInput] = useState("");
@@ -61,6 +67,8 @@ export function AIPanel({ boardId, itemId, onClose }: AIPanelProps) {
         const res = await fetch("/api/ai/chat", { method: "GET" });
         const data = await res.json();
         setLlmConfigured(Boolean(data.configured));
+        if (data.provider) setAiProvider(data.provider);
+        if (data.model) setAiModel(data.model);
       } catch {
         setLlmConfigured(false);
       } finally {
@@ -69,6 +77,25 @@ export function AIPanel({ boardId, itemId, onClose }: AIPanelProps) {
     };
     fetchStatus();
   }, []);
+
+  // Fetch board items for item-specific AI actions
+  useEffect(() => {
+    const fetchItems = async () => {
+      setItemsLoading(true);
+      try {
+        const res = await fetch(`/api/boards/${boardId}/items`);
+        if (res.ok) {
+          const data = await res.json();
+          setBoardItems(data.items ?? []);
+        }
+      } catch {
+        // ignore
+      } finally {
+        setItemsLoading(false);
+      }
+    };
+    fetchItems();
+  }, [boardId]);
 
   useEffect(() => {
     if (!chatScrollRef.current) return;
@@ -83,7 +110,13 @@ export function AIPanel({ boardId, itemId, onClose }: AIPanelProps) {
       const res = await fetch("/api/ai/suggest", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ boardId, itemId, action: suggestAction }),
+        body: JSON.stringify({
+          boardId,
+          itemId: suggestItemId,
+          action: suggestAction,
+          provider: aiProvider !== "auto" ? aiProvider : undefined,
+          model: aiModel || undefined,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed");
@@ -103,7 +136,7 @@ export function AIPanel({ boardId, itemId, onClose }: AIPanelProps) {
       const res = await fetch("/api/ai/generate-items", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ boardId, description: genDescription }),
+        body: JSON.stringify({ boardId, description: genDescription, provider: aiProvider !== "auto" ? aiProvider : undefined, model: aiModel || undefined }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed");
@@ -123,7 +156,7 @@ export function AIPanel({ boardId, itemId, onClose }: AIPanelProps) {
       const res = await fetch("/api/ai/summarize-board", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ boardId }),
+        body: JSON.stringify({ boardId, provider: aiProvider !== "auto" ? aiProvider : undefined, model: aiModel || undefined }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed");
@@ -158,6 +191,8 @@ export function AIPanel({ boardId, itemId, onClose }: AIPanelProps) {
           boardId,
           message: trimmed,
           conversationHistory: payloadHistory,
+          provider: aiProvider !== "auto" ? aiProvider : undefined,
+          model: aiModel || undefined,
         }),
       });
       const data = await res.json();
@@ -206,7 +241,6 @@ export function AIPanel({ boardId, itemId, onClose }: AIPanelProps) {
       </div>
 
       <div className="flex items-center justify-between border-b px-4 py-2">
-        <span className="text-[11px] text-muted-foreground">LLM status</span>
         <div className="flex items-center gap-1.5 text-[11px]">
           <span
             className={`h-2.5 w-2.5 rounded-full ${
@@ -214,10 +248,41 @@ export function AIPanel({ boardId, itemId, onClose }: AIPanelProps) {
             }`}
           />
           <span className="text-muted-foreground">
-            {statusLoading ? "Checking..." : llmConfigured ? "Configured" : "Fallback mode"}
+            {statusLoading ? "Checking..." : llmConfigured ? `${aiProvider !== "auto" ? aiProvider : "Configured"}` : "Fallback mode"}
           </span>
+          {aiModel && <span className="text-[10px] text-muted-foreground">({aiModel})</span>}
         </div>
+        <button
+          onClick={() => setShowModelSettings(!showModelSettings)}
+          className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1"
+        >
+          <Settings className="h-3 w-3" /> Model
+        </button>
       </div>
+
+      {showModelSettings && (
+        <div className="border-b px-4 py-2 space-y-2">
+          <p className="text-[10px] font-medium text-muted-foreground">AI Provider & Model</p>
+          <select
+            value={aiProvider}
+            onChange={(e) => setAiProvider(e.target.value)}
+            className="h-8 w-full rounded-md border px-2 text-xs"
+          >
+            <option value="auto">Auto-detect</option>
+            <option value="openai">OpenAI</option>
+            <option value="anthropic">Anthropic</option>
+          </select>
+          <Input
+            placeholder="Model name (e.g. gpt-4o, claude-3-5-sonnet)"
+            value={aiModel}
+            onChange={(e) => setAiModel(e.target.value)}
+            className="h-8 text-xs"
+          />
+          <p className="text-[10px] text-muted-foreground">
+            Leave model empty to use default. Provider must match an API key in your .env.
+          </p>
+        </div>
+      )}
 
       <div className="flex border-b">
         {tabs.map((t) => (
@@ -251,7 +316,28 @@ export function AIPanel({ boardId, itemId, onClose }: AIPanelProps) {
               <option value="status">Predict next status</option>
               <option value="categorize">Suggest group</option>
             </select>
-            <Button size="sm" className="w-full bg-mamba-600 hover:bg-mamba-700" disabled={loading} onClick={handleSuggest}>
+            {["priority", "status", "categorize"].includes(suggestAction) && (
+              <div className="space-y-1">
+                <label className="text-[10px] text-muted-foreground">Select item for context</label>
+                {itemsLoading ? (
+                  <p className="text-xs text-muted-foreground">Loading items...</p>
+                ) : boardItems.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No items on this board</p>
+                ) : (
+                  <select
+                    value={suggestItemId ?? ""}
+                    onChange={(e) => setSuggestItemId(e.target.value || undefined)}
+                    className="h-9 w-full rounded-md border px-2 text-xs"
+                  >
+                    <option value="">— Select an item —</option>
+                    {boardItems.map((item) => (
+                      <option key={item.id} value={item.id}>{item.name}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            )}
+            <Button size="sm" className="w-full bg-mamba-600 hover:bg-mamba-700" disabled={loading || (["priority", "status", "categorize"].includes(suggestAction) && !suggestItemId)} onClick={handleSuggest}>
               {loading ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Wand2 className="mr-1 h-3 w-3" />} Suggest
             </Button>
             {result && (

@@ -5044,6 +5044,90 @@ function DetailValueEditor({
     );
   }
 
+  if (column.columnType === "PEOPLE") {
+    const assignedUsers = Array.isArray(cv.value) ? cv.value as Array<{ id: string; name: string; avatarUrl?: string }> : [];
+    return (
+      <div className="space-y-2">
+        {assignedUsers.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {assignedUsers.map((u, idx) => (
+              <span key={u.id ?? idx} className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-xs text-blue-700">
+                {u.avatarUrl && <img src={u.avatarUrl} alt="" className="h-4 w-4 rounded-full" />}
+                {u.name}
+                <button
+                  type="button"
+                  className="ml-0.5 text-blue-400 hover:text-blue-600"
+                  onClick={() => {
+                    const updated = assignedUsers.filter((_, i) => i !== idx);
+                    onUpdateValue(cv.id, updated);
+                  }}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        <Input
+          placeholder="Type a name and press Enter to assign"
+          className="h-8 text-xs"
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              const name = event.currentTarget.value.trim();
+              if (!name) return;
+              const newAssigned = [...assignedUsers, { id: `user-${Date.now()}`, name }];
+              onUpdateValue(cv.id, newAssigned);
+              event.currentTarget.value = "";
+            }
+          }}
+        />
+      </div>
+    );
+  }
+
+  if (column.columnType === "RATING") {
+    const currentRating = typeof cv.value === "number" ? cv.value : 0;
+    return (
+      <div className="flex items-center gap-1">
+        {[1, 2, 3, 4, 5].map((star) => (
+          <button
+            key={star}
+            type="button"
+            onClick={() => onUpdateValue(cv.id, star === currentRating ? 0 : star)}
+            className={cn(
+              "text-lg transition-colors",
+              star <= currentRating ? "text-yellow-400" : "text-muted-foreground/30 hover:text-yellow-200"
+            )}
+          >
+            ★
+          </button>
+        ))}
+        <span className="ml-2 text-xs text-muted-foreground">{currentRating}/5</span>
+      </div>
+    );
+  }
+
+  if (column.columnType === "TIMELINE") {
+    const timelineValue = cv.value as { start?: string; end?: string } | null;
+    return (
+      <div className="flex items-center gap-2">
+        <Input
+          type="date"
+          defaultValue={timelineValue?.start ? new Date(timelineValue.start).toISOString().slice(0, 10) : ""}
+          onChange={(event) => onUpdateValue(cv.id, { ...timelineValue, start: event.target.value || undefined })}
+          className="h-8 text-xs"
+        />
+        <span className="text-xs text-muted-foreground">→</span>
+        <Input
+          type="date"
+          defaultValue={timelineValue?.end ? new Date(timelineValue.end).toISOString().slice(0, 10) : ""}
+          onChange={(event) => onUpdateValue(cv.id, { ...timelineValue, end: event.target.value || undefined })}
+          className="h-8 text-xs"
+        />
+      </div>
+    );
+  }
+
   if (column.columnType === "FILE") {
     const files = Array.isArray(cv.value) ? cv.value : [];
     return (

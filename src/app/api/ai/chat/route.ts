@@ -36,10 +36,12 @@ export async function POST(req: NextRequest) {
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const body = await req.json();
-    const { boardId, message, conversationHistory } = body as {
+    const { boardId, message, conversationHistory, provider, model } = body as {
       boardId?: string;
       message?: string;
       conversationHistory?: ChatMessage[];
+      provider?: string;
+      model?: string;
     };
 
     if (!boardId || !message?.trim()) {
@@ -95,7 +97,7 @@ export async function POST(req: NextRequest) {
         ]
           .filter(Boolean)
           .join("\n\n"),
-        { temperature: 0.3, maxOutputTokens: 550 }
+        { temperature: 0.3, maxOutputTokens: 550, model: model, provider: provider as any }
       );
 
       if (llm.fallback || !llm.text.trim()) {
