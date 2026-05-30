@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import {
-  Edit2, Plus, FolderKanban, MoreHorizontal, Trash2,
+  Edit2, Plus, FolderKanban, MoreHorizontal, Trash2, ChevronDown, ChevronRight, Palette,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -23,7 +23,7 @@ interface WorkspaceClientProps {
     id: string; name: string; description: string | null; icon: string | null; color: string | null; logoUrl: string | null; customDomain: string | null;
     owner: { id: string; firstName: string; lastName: string; avatarUrl: string | null };
     members: Array<{ user: { id: string; firstName: string; lastName: string; avatarUrl: string | null } }>;
-    boards: Array<{ id: string; name: string; boardKind: string; _count: { items: number } }>;
+    boards: Array<{ id: string; name: string; boardKind: string; color: string | null; _count: { items: number } }>;
   };
 }
 
@@ -39,6 +39,8 @@ export function WorkspaceClient({ workspace }: WorkspaceClientProps) {
   const [showBroadcast, setShowBroadcast] = useState(false);
   const [workspaceLogoUrl, setWorkspaceLogoUrl] = useState(workspace.logoUrl ?? "");
   const [workspaceCustomDomain, setWorkspaceCustomDomain] = useState(workspace.customDomain ?? "");
+  const [brandingCollapsed, setBrandingCollapsed] = useState(true);
+  const [governanceCollapsed, setGovernanceCollapsed] = useState(true);
 
   const patchWorkspace = async (patch: { name?: string; description?: string; color?: string; logoUrl?: string | null; customDomain?: string | null }) => {
     const res = await fetch(`/api/workspaces/${workspace.id}`, {
@@ -111,6 +113,19 @@ export function WorkspaceClient({ workspace }: WorkspaceClientProps) {
             >
               <Edit2 className="h-4 w-4" />
             </button>
+            <span className="relative" title="Change workspace color">
+              <input
+                type="color"
+                value={workspaceColor}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setWorkspaceColor(next);
+                  patchWorkspace({ color: next });
+                }}
+                className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+              />
+              <span className="block h-4 w-4 rounded-full border" style={{ backgroundColor: workspaceColor }} />
+            </span>
           </h1>
           )}
           <Input
@@ -150,8 +165,15 @@ export function WorkspaceClient({ workspace }: WorkspaceClientProps) {
 
       {/* Workspace Branding */}
       <div className="rounded-lg border p-4 space-y-3">
-          <h3 className="text-sm font-medium">Workspace Branding</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <button
+            type="button"
+            className="flex w-full items-center justify-between text-sm font-medium"
+            onClick={() => setBrandingCollapsed((v) => !v)}
+          >
+            Workspace Branding
+            {brandingCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </button>
+          {!brandingCollapsed && <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div className="space-y-1">
               <label className="text-xs text-muted-foreground">Logo URL</label>
               <Input
@@ -175,18 +197,30 @@ export function WorkspaceClient({ workspace }: WorkspaceClientProps) {
                   await patchWorkspace({ customDomain: workspaceCustomDomain.trim().toLowerCase() || null });
                 }}
               />
-          </div>
+          </div>}
         </div>
       </div>
 
       {/* Data Governance */}
-      <WorkspaceGovernance workspaceId={workspace.id} />
+      <div className="rounded-lg border p-4 space-y-3">
+          <button
+            type="button"
+            className="flex w-full items-center justify-between text-sm font-medium"
+            onClick={() => setGovernanceCollapsed((v) => !v)}
+          >
+            Data Governance
+            {governanceCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </button>
+          {!governanceCollapsed && <div className="mt-3">
+            <WorkspaceGovernance workspaceId={workspace.id} />
+          </div>}
+        </div>
 
       {/* Boards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {boards.map((board) => (
           <Link key={board.id} href={`/board/${board.id}`}>
-            <Card className="hover:shadow-md transition-shadow cursor-pointer group border-l-4" style={{ borderLeftColor: workspaceColor }}>
+            <Card className="hover:shadow-md transition-shadow cursor-pointer group border-l-4" style={{ borderLeftColor: board.color ?? workspaceColor }}>
               <CardHeader className="pb-2">
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-base flex items-center gap-2">
@@ -200,7 +234,41 @@ export function WorkspaceClient({ workspace }: WorkspaceClientProps) {
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
-                      <DropdownMenuItem className="text-destructive">
+                      <DropdownMenuItem onSelect={async (e) => {
+                        e.preventDefault();
+                        const newName = prompt("Rename board", board.name);
+                        if (!newName || !newName.trim() || newName.trim() === board.name) return;
+                        const res = await fetch(`/api/boards/${board.id}`, {
+                          method: "PATCH",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ name: newName.trim() }),
+                        });
+                        if (res.ok) {
+                          setBoards((prev) => prev.map((b) => b.id === board.id ? { ...b, name: newName.trim() } : b));
+                        }
+                      }}>
+                        <Edit2 className="h-3 w-3 mr-2" /> Rename
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => {
+                        const color = prompt("Board color (hex)", "#579bfc");
+                        if (!color) return;
+                        fetch(`/api/boards/${board.id}`, {
+                          method: "PATCH",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ color }),
+                        }).then((res) => {
+                          if (res.ok) {
+                            setBoards((prev) => prev.map((b) => b.id === board.id ? { ...b, color } : b));
+                          }
+                        });
+                      }}>
+                        <Palette className="h-3 w-3 mr-2" /> Change Color
+                      </DropdownMenuItem>
+                      <DropdownMenuItem className="text-destructive" onSelect={async () => {
+                        if (!confirm(`Delete "${board.name}"?`)) return;
+                        const res = await fetch(`/api/boards/${board.id}`, { method: "DELETE" });
+                        if (res.ok) setBoards((prev) => prev.filter((b) => b.id !== board.id));
+                      }}>
                         <Trash2 className="h-3 w-3 mr-2" /> Delete
                       </DropdownMenuItem>
                     </DropdownMenuContent>

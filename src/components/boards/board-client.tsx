@@ -330,6 +330,9 @@ function getComparableValue(item: Item, column: Column): string | number {
 }
 
 export function BoardClient({ user, board }: BoardClientProps) {
+  const [boardName, setBoardName] = useState(board.name);
+  const [boardColor, setBoardColor] = useState(board.color ?? "#579bfc");
+  const [editingBoardName, setEditingBoardName] = useState(false);
 
     const [columns, setColumns] = useState<Column[]>(board.columns);
   const [groups, setGroups] = useState<Group[]>(board.groups);
@@ -1696,11 +1699,58 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
             {board.workspace.name}
           </Link>
           <ChevronRight className="h-3 w-3" />
-          <span className="font-medium text-foreground">{board.name}</span>
+          <span className="font-medium text-foreground">{boardName}</span>
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h1 className="text-2xl font-bold tracking-tight">{board.name}</h1>
+          {editingBoardName ? (
+            <Input
+              className="h-9 w-[320px] text-2xl font-bold"
+              value={boardName}
+              autoFocus
+              onChange={(event) => setBoardName(event.target.value)}
+              onBlur={async () => {
+                const nextName = boardName.trim();
+                if (!nextName) { setBoardName(board.name); setEditingBoardName(false); return; }
+                const res = await fetch(`/api/boards/${board.id}`, {
+                  method: "PATCH",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ name: nextName }),
+                });
+                if (!res.ok) setBoardName(board.name);
+                setEditingBoardName(false);
+              }}
+              onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
+            />
+          ) : (
+            <h1
+              className="text-2xl font-bold tracking-tight flex items-center gap-2 cursor-pointer"
+              onDoubleClick={() => setEditingBoardName(true)}
+              title="Double-click to rename"
+            >
+              <span className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground">
+                <Edit2 className="h-4 w-4" />
+              </span>
+              <span className="relative" title="Change board color">
+                <input
+                  type="color"
+                  value={boardColor}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setBoardColor(next);
+                    fetch(`/api/boards/${board.id}`, {
+                      method: "PATCH",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ color: next }),
+                    });
+                  }}
+                  className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                />
+                <span className="block h-6 w-6 rounded-full border" style={{ backgroundColor: boardColor }} />
+              </span>
+              {boardName}
+            </h1>
+          )}
           {onlineCount > 0 && (
             <span className="inline-flex items-center gap-1 text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
               <span className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />

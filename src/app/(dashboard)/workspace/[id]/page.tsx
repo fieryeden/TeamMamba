@@ -17,7 +17,11 @@ export default async function WorkspacePage({ params }: { params: Promise<{ id: 
         include: { user: { select: { id: true, firstName: true, lastName: true, avatarUrl: true } } },
       },
       boards: {
-        include: {
+        select: {
+          id: true,
+          name: true,
+          boardKind: true,
+          color: true,
           _count: { select: { items: true } },
         },
         orderBy: { updatedAt: "desc" },
