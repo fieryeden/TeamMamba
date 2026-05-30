@@ -371,6 +371,12 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
   const [mondayImportFile, setMondayImportFile] = useState<File | null>(null);
   const [mondayImportLoading, setMondayImportLoading] = useState(false);
   const [mondayImportSummary, setMondayImportSummary] = useState<string | null>(null);
+  // Monday.com API mode
+  const [mondayApiToken, setMondayApiToken] = useState("");
+  const [mondayApiBoards, setMondayApiBoards] = useState<Array<{ id: string; name: string }>>([]);
+  const [mondaySelectedBoards, setMondaySelectedBoards] = useState<Set<string>>(new Set());
+  const [mondayApiFetching, setMondayApiFetching] = useState(false);
+  const [mondayApiError, setMondayApiError] = useState<string | null>(null);
   const [polls, setPolls] = useState<Array<any>>([]);
   const [showPollModal, setShowPollModal] = useState(false);
   const [pollsLoaded, setPollsLoaded] = useState(false);
@@ -1575,6 +1581,68 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
     }
   };
 
+  const handleFetchMondayBoards = async () => {
+    if (!mondayApiToken.trim()) {
+      setMondayApiError("Please enter your Monday.com API token");
+      return;
+    }
+    setMondayApiFetching(true);
+    setMondayApiError(null);
+    try {
+      const res = await fetch(`/api/boards/import-monday-api?token=${encodeURIComponent(mondayApiToken.trim())}`);
+      const data = await res.json();
+      if (!res.ok) {
+        setMondayApiError(data.error ?? "Failed to fetch boards");
+        return;
+      }
+      setMondayApiBoards(data.boards ?? []);
+      if (data.boards?.length === 0) {
+        setMondayApiError("No boards found. Check your token and try again.");
+      }
+    } catch {
+      setMondayApiError("Failed to connect to Monday.com API");
+    } finally {
+      setMondayApiFetching(false);
+    }
+  };
+
+  const handleImportMondayApi = async () => {
+    if (mondaySelectedBoards.size === 0) {
+      setMondayImportSummary("Select at least one board to import");
+      return;
+    }
+    setMondayImportLoading(true);
+    setMondayImportSummary(null);
+    try {
+      const res = await fetch("/api/boards/import-monday-api", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          token: mondayApiToken.trim(),
+          mondayBoardIds: Array.from(mondaySelectedBoards),
+          boardId: board.id,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMondayImportSummary(data.error ?? "Monday API import failed");
+        return;
+      }
+      const summary = [
+        `Rows imported: ${data.rowsImported ?? 0}`,
+        `Groups created: ${Array.isArray(data.groupsCreated) ? data.groupsCreated.length : 0}`,
+        `Columns created: ${Array.isArray(data.columnsCreated) ? data.columnsCreated.length : 0}`,
+        `Errors: ${Array.isArray(data.errors) ? data.errors.length : 0}`,
+      ].join("\n");
+      setMondayImportSummary(summary);
+      setToastMessage("Monday.com import complete");
+    } catch {
+      setMondayImportSummary("Monday API import failed");
+    } finally {
+      setMondayImportLoading(false);
+    }
+  };
+
   useEffect(() => {
     const onQuickNewItem = () => {
       const firstGroupId = groups[0]?.id;
@@ -1621,9 +1689,9 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
             </span>
           )}
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as ViewMode)}>
-              <TabsList className="h-8 bg-muted/70">
+              <TabsList className="h-8 bg-muted/70 flex-wrap">
                 <TabsTrigger value="TABLE" className="px-2 text-xs">
                   <List className="mr-1 h-3 w-3" /> Table
                 </TabsTrigger>
@@ -2232,8 +2300,68 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
            </Button>
          </div>
        ) : (
-         <div className="rounded-md border p-2 text-xs text-muted-foreground">
-           API mode is planned next. CSV mode is available now.
+         <div className="space-y-3">
+           <Input
+             type="password"
+             placeholder="Monday.com API token"
+             className="h-9 text-xs"
+             value={mondayApiToken}
+             onChange={(e) => setMondayApiToken(e.target.value)}
+           />
+           <div className="flex items-center gap-2">
+             <Button
+               size="sm"
+               className="h-8"
+               disabled={mondayApiFetching || !mondayApiToken.trim()}
+               onClick={() => handleFetchMondayBoards().catch(() => {})}
+             >
+               {mondayApiFetching ? "Fetching..." : "Fetch Boards"}
+             </Button>
+             <span className="text-[10px] text-muted-foreground">
+               Get your token from monday.com → Admin → API
+             </span>
+           </div>
+           {mondayApiError && (
+             <p className="text-xs text-destructive">{mondayApiError}</p>
+           )}
+           {mondayApiBoards.length > 0 && (
+             <div className="space-y-1">
+               <p className="text-xs font-medium">Select boards to import ({mondaySelectedBoards.size} selected)</p>
+               <div className="max-h-40 overflow-y-auto rounded-md border">
+                 {mondayApiBoards.map((b) => (
+                   <label
+                     key={b.id}
+                     className="flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent/30 cursor-pointer"
+                   >
+                     <input
+                       type="checkbox"
+                       checked={mondaySelectedBoards.has(b.id)}
+                       onChange={() => {
+                         setMondaySelectedBoards((prev) => {
+                           const next = new Set(prev);
+                           if (next.has(b.id)) next.delete(b.id);
+                           else next.add(b.id);
+                           return next;
+                         });
+                       }}
+                       className="h-3.5 w-3.5 rounded"
+                     />
+                     <span className="truncate">{b.name}</span>
+                   </label>
+                 ))}
+               </div>
+             </div>
+           )}
+           {mondayApiBoards.length > 0 && (
+             <Button
+               size="sm"
+               className="h-8 w-full"
+               disabled={mondaySelectedBoards.size === 0 || mondayImportLoading}
+               onClick={() => handleImportMondayApi().catch(() => {})}
+             >
+               {mondayImportLoading ? "Importing..." : `Import ${mondaySelectedBoards.size} Board(s)`}
+             </Button>
+           )}
          </div>
        )}
        {mondayImportSummary && (
