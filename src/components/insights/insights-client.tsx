@@ -19,6 +19,7 @@ import {
   Hash,
   BarChart,
   GripVertical,
+  LayoutGrid,
 } from "lucide-react";
 import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -83,6 +84,7 @@ const WIDGET_TYPES = [
   { value: "CHART_PIE", label: "Pie Chart", icon: PieChart },
   { value: "BURNDOWN", label: "Burndown", icon: TrendingDown },
   { value: "RECENT_ACTIVITY", label: "Recent Activity", icon: Activity },
+  { value: "KANBAN", label: "Kanban", icon: LayoutGrid },
 ];
 
 const WIDGETS_REQUIRING_COLUMN = new Set([
@@ -96,7 +98,7 @@ const WIDGETS_REQUIRING_COLUMN = new Set([
 const COLORS = ["#579bfc", "#fdab3d", "#e2445c", "#00c875", "#a25ddc", "#ff158a", "#ff642e", "#037f4c"];
 
 function defaultSize(type: string) {
-  if (["STATUS_BREAKDOWN", "CHART_BAR", "CHART_LINE", "CHART_PIE", "BURNDOWN", "RECENT_ACTIVITY"].includes(type)) {
+  if (["STATUS_BREAKDOWN", "CHART_BAR", "CHART_LINE", "CHART_PIE", "BURNDOWN", "RECENT_ACTIVITY", "KANBAN"].includes(type)) {
     return { width: 2, height: 1 };
   }
   return { width: 1, height: 1 };
@@ -568,6 +570,36 @@ export function InsightsClient({ dashboards: initialDashboards, boards, initialD
               <Line type="monotone" dataKey="completed" stroke="#00c875" name="Completed" />
             </RechartsLine>
           </ResponsiveContainer>
+        );
+      }
+
+      case "KANBAN": {
+        const boardId = (widget.config as Record<string, unknown>)?.boardId as string | undefined;
+        const kanbanGroups = (data.kanbanGroups as Array<{ id: string; name: string; color: string; items: Array<{ id: string; name: string; status: string | null }> }>) ?? [];
+        return (
+          <div className="space-y-3">
+            {!boardId && (
+              <p className="text-xs text-muted-foreground">Select a board to display Kanban view</p>
+            )}
+            {kanbanGroups.map((group) => (
+              <div key={group.id} className="rounded-md border p-2">
+                <div className="mb-1 flex items-center gap-2">
+                  <div className="h-2 w-2 rounded-full" style={{ backgroundColor: group.color }} />
+                  <span className="text-xs font-medium">{group.name}</span>
+                  <span className="text-[10px] text-muted-foreground">{group.items.length}</span>
+                </div>
+                <div className="space-y-1">
+                  {group.items.slice(0, 5).map((item) => (
+                    <div key={item.id} className="flex items-center gap-1.5 rounded px-1.5 py-0.5 text-[11px] hover:bg-accent/30">
+                      {item.status && <div className="h-1.5 w-1.5 rounded-full bg-blue-400" />}
+                      <span className="truncate">{item.name}</span>
+                    </div>
+                  ))}
+                  {group.items.length > 5 && <p className="text-[10px] text-muted-foreground pl-3">+{group.items.length - 5} more</p>}
+                </div>
+              </div>
+            ))}
+          </div>
         );
       }
 

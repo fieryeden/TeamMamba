@@ -305,6 +305,44 @@ export async function GET(
           break;
         }
 
+        case "KANBAN": {
+          const kanbanBoardId = config.boardId as string | undefined;
+          if (!kanbanBoardId) {
+            results[widget.id] = { error: "No boardId configured" };
+            break;
+          }
+          const boardGroups = await prisma.group.findMany({
+            where: { boardId: kanbanBoardId },
+            include: {
+              items: {
+                include: {
+                  columnValues: {
+                    where: { column: { columnType: "STATUS" } },
+                    select: { value: true },
+                  },
+                },
+                take: 50,
+              },
+            },
+            orderBy: { position: "asc" },
+          });
+          results[widget.id] = {
+            kanbanGroups: boardGroups.map((g) => ({
+              id: g.id,
+              name: g.name,
+              color: g.color,
+              items: g.items.map((item) => ({
+                id: item.id,
+                name: item.name,
+                status: item.columnValues[0]?.value
+                  ? String((item.columnValues[0].value as Record<string, unknown>)?.label ?? (item.columnValues[0].value as Record<string, unknown>)?.index ?? null)
+                  : null,
+              })),
+            })),
+          };
+          break;
+        }
+
         default:
           results[widget.id] = { error: "Unknown widget type" };
       }
