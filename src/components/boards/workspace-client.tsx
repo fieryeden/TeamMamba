@@ -165,15 +165,16 @@ export function WorkspaceClient({ workspace }: WorkspaceClientProps) {
 
       {/* Workspace Branding */}
       <div className="rounded-lg border p-4 space-y-3">
-          <button
-            type="button"
-            className="flex w-full items-center justify-between text-sm font-medium"
-            onClick={() => setBrandingCollapsed((v) => !v)}
-          >
-            Workspace Branding
-            {brandingCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-          </button>
-          {!brandingCollapsed && <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <button
+          type="button"
+          className="flex w-full items-center justify-between text-sm font-medium"
+          onClick={() => setBrandingCollapsed((v) => !v)}
+        >
+          Workspace Branding
+          {brandingCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+        </button>
+        {!brandingCollapsed && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div className="space-y-1">
               <label className="text-xs text-muted-foreground">Logo URL</label>
               <Input
@@ -197,24 +198,27 @@ export function WorkspaceClient({ workspace }: WorkspaceClientProps) {
                   await patchWorkspace({ customDomain: workspaceCustomDomain.trim().toLowerCase() || null });
                 }}
               />
-          </div>}
-        </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Data Governance */}
       <div className="rounded-lg border p-4 space-y-3">
-          <button
-            type="button"
-            className="flex w-full items-center justify-between text-sm font-medium"
-            onClick={() => setGovernanceCollapsed((v) => !v)}
-          >
-            Data Governance
-            {governanceCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-          </button>
-          {!governanceCollapsed && <div className="mt-3">
+        <button
+          type="button"
+          className="flex w-full items-center justify-between text-sm font-medium"
+          onClick={() => setGovernanceCollapsed((v) => !v)}
+        >
+          Data Governance
+          {governanceCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+        </button>
+        {!governanceCollapsed && (
+          <div className="mt-3">
             <WorkspaceGovernance workspaceId={workspace.id} />
-          </div>}
-        </div>
+          </div>
+        )}
+      </div>
 
       {/* Boards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
