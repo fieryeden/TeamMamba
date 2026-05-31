@@ -919,11 +919,17 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
       if (!itemId || !columnId) return;
       patchColumnValueInState(valueId, value);
       try {
-        await fetch("/api/columns/values", {
+        const res = await fetch("/api/columns/values", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ itemId, columnId, value }),
         });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.columnValue) {
+            upsertColumnValueInState(itemId, data.columnValue);
+          }
+        }
       } catch (err) {
         console.error("Failed to create column value:", err);
       }
@@ -2112,6 +2118,7 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
             onSelectItem={(itemId) => setSelectedItemId(itemId)}
             onReorderItems={handleReorderTableItems}
             allColumns={columns}
+            boardMembers={board.members}
           />
         )}
 
@@ -3797,6 +3804,7 @@ function KanbanView({
   searchQuery,
   onSelectItem,
   allColumns,
+  boardMembers,
 }: {
   groups: Group[];
   columns: Column[];
@@ -3808,6 +3816,7 @@ function KanbanView({
   searchQuery: string;
   onSelectItem: (itemId: string) => void;
   allColumns: Column[];
+  boardMembers: Array<{ user: { id: string; firstName: string; lastName: string; avatarUrl: string | null } }>;
 }) {
   const [laneOrder, setLaneOrder] = useState<Record<number, string[]>>({});
   const [showCardSettings, setShowCardSettings] = useState(false);
@@ -4078,22 +4087,55 @@ function KanbanView({
                                   </p>
                                 );
                               })}
-                              <div className="mt-2 flex items-center justify-between">
-                                {cardSettings.showAssignees && (
-                                  <div className="flex -space-x-1">
-                                    {item.assignees.slice(0, 3).map((assignee) => (
-                                      <Avatar key={assignee.user.id} className="h-5 w-5 border border-background">
-                                        <AvatarFallback className="text-[8px]">
-                                          {assignee.user.firstName[0]}
-                                          {assignee.user.lastName[0]}
-                                        </AvatarFallback>
-                                      </Avatar>
-                                    ))}
-                                    {item.assignees.length === 0 && (
-                                      <span className="text-[10px] text-muted-foreground">Unassigned</span>
-                                    )}
+                              <div className="mt-2">
+                                {cardSettings.showAssignees && boardMembers.length > 0 && (
+                                  <div className="flex flex-wrap gap-1">
+                                    {boardMembers.map((member) => {
+                                      const peopleCol = allColumns.find((c) => c.columnType === "PEOPLE");
+                                      const pcv = peopleCol ? item.columnValues.find((v) => v.column.id === peopleCol.id) : null;
+                                      const assignedUsers = (pcv?.value as Array<{id:string;name:string}> | null) || [];
+                                      const isAssigned = assignedUsers.some((u) => u.id === member.user.id);
+                                      return (
+                                        <button
+                                          key={member.user.id}
+                                          type="button"
+                                          title={`${member.user.firstName} ${member.user.lastName}`}
+                                          onClick={(event) => {
+                                            event.stopPropagation();
+                                            if (!peopleCol) return;
+                                            const currentVal = assignedUsers;
+                                            let updated;
+                                            if (isAssigned) {
+                                              updated = currentVal.filter((u) => u.id !== member.user.id);
+                                            } else {
+                                              updated = [...currentVal, { id: member.user.id, name: `${member.user.firstName} ${member.user.lastName}` }];
+                                            }
+                                            if (pcv) {
+                                              onUpdateValue(pcv.id, updated);
+                                            } else {
+                                              onUpdateValue(`create:${item.id}:${peopleCol.id}`, updated);
+                                            }
+                                          }}
+                                          className={cn(
+                                            "flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] transition-colors",
+                                            isAssigned
+                                              ? "border-mamba-400 bg-mamba-50 text-mamba-700 ring-1 ring-mamba-300"
+                                              : "border-muted bg-background text-muted-foreground hover:border-mamba-300 hover:bg-mamba-50/50",
+                                          )}
+                                        >
+                                          <Avatar className="h-4 w-4">
+                                            <AvatarFallback className="text-[7px]">
+                                              {member.user.firstName[0]}{member.user.lastName[0]}
+                                            </AvatarFallback>
+                                          </Avatar>
+                                          <span className="max-w-[60px] truncate">{member.user.firstName}</span>
+                                        </button>
+                                      );
+                                    })}
                                   </div>
                                 )}
+                              </div>
+                              <div className="mt-1 flex items-center justify-between">
                                 {statusValue && (
                                   <span
                                     onClick={(event) => {
