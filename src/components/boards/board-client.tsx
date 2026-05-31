@@ -2111,6 +2111,7 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
             searchQuery={normalizedSearchQuery}
             onSelectItem={(itemId) => setSelectedItemId(itemId)}
             onReorderItems={handleReorderTableItems}
+            allColumns={columns}
           />
         )}
 
@@ -3795,6 +3796,7 @@ function KanbanView({
   onCreateItemInLane,
   searchQuery,
   onSelectItem,
+  allColumns,
 }: {
   groups: Group[];
   columns: Column[];
@@ -3805,8 +3807,23 @@ function KanbanView({
   onCreateItemInLane: (statusIndex: number) => void;
   searchQuery: string;
   onSelectItem: (itemId: string) => void;
+  allColumns: Column[];
 }) {
   const [laneOrder, setLaneOrder] = useState<Record<number, string[]>>({});
+  const [showCardSettings, setShowCardSettings] = useState(false);
+  const [cardSettings, setCardSettings] = useState<{
+    showDate: boolean;
+    showPriority: boolean;
+    showAssignees: boolean;
+    showGroupName: boolean;
+    visibleColumns: string[];
+  }>({
+    showDate: false,
+    showPriority: true,
+    showAssignees: true,
+    showGroupName: true,
+    visibleColumns: [],
+  });
   const dragInFlight = useRef(false);
   const statusColumn = columns.find((column) => column.columnType === "STATUS");
 
@@ -3899,10 +3916,115 @@ function KanbanView({
     onReorderItems(draggedItem.id, draggedItem.groupId, draggedItem.groupId, destination.index);
   };
 
+  const dateColumns = allColumns.filter((c) => c.columnType === "DATE" || c.columnType === "TIMELINE");
+  const peopleColumns = allColumns.filter((c) => c.columnType === "PEOPLE");
+  const extraColumns = allColumns.filter(
+    (c) =>
+      c.columnType !== "STATUS" &&
+      c.columnType !== "DATE" &&
+      c.columnType !== "TIMELINE" &&
+      c.columnType !== "PEOPLE" &&
+      c.columnType !== "ITEM_ID" &&
+      c.columnType !== "CREATION_LOG" &&
+      c.columnType !== "LAST_UPDATE" &&
+      c.columnType !== "AUTO_NUMBER" &&
+      c.columnType !== "FORMULA",
+  );
+
+  const toggleColumnVisibility = (columnId: string) => {
+    setCardSettings((prev) => {
+      const visible = prev.visibleColumns.includes(columnId)
+        ? prev.visibleColumns.filter((id) => id !== columnId)
+        : [...prev.visibleColumns, columnId];
+      return { ...prev, visibleColumns: visible };
+    });
+  };
+
   return (
-    <div className="h-full overflow-auto px-4 py-3">
+    <div className="h-full overflow-auto px-4 py-3 relative">
+      {/* Kanban Card Settings */}
+      <div className="absolute right-4 top-3 z-10">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          onClick={() => setShowCardSettings(true)}
+          title="Card display settings"
+        >
+          ⚙️
+        </Button>
+      </div>
+
+      {/* Settings Dialog */}
+      {showCardSettings && (
+        <div className="absolute right-4 top-12 z-50 w-72 rounded-lg border bg-card p-4 shadow-lg">
+          <h3 className="text-sm font-semibold mb-3">Card Display Settings</h3>
+          <div className="space-y-3">
+            <label className="flex items-center gap-2 text-xs cursor-pointer">
+              <input
+                type="checkbox"
+                checked={cardSettings.showGroupName}
+                onChange={() => setCardSettings((s) => ({ ...s, showGroupName: !s.showGroupName }))}
+                className="h-3.5 w-3.5 rounded border"
+              />
+              Show group name
+            </label>
+            <label className="flex items-center gap-2 text-xs cursor-pointer">
+              <input
+                type="checkbox"
+                checked={cardSettings.showAssignees}
+                onChange={() => setCardSettings((s) => ({ ...s, showAssignees: !s.showAssignees }))}
+                className="h-3.5 w-3.5 rounded border"
+              />
+              Show assignees
+            </label>
+            {dateColumns.map((col) => (
+              <label key={col.id} className="flex items-center gap-2 text-xs cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={cardSettings.visibleColumns.includes(col.id)}
+                  onChange={() => toggleColumnVisibility(col.id)}
+                  className="h-3.5 w-3.5 rounded border"
+                />
+                Show: {col.title}
+              </label>
+            ))}
+            {peopleColumns.filter((c) => c.id !== peopleColumns[0]?.id).map((col) => (
+              <label key={col.id} className="flex items-center gap-2 text-xs cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={cardSettings.visibleColumns.includes(col.id)}
+                  onChange={() => toggleColumnVisibility(col.id)}
+                  className="h-3.5 w-3.5 rounded border"
+                />
+                Show: {col.title}
+              </label>
+            ))}
+            {extraColumns.map((col) => (
+              <label key={col.id} className="flex items-center gap-2 text-xs cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={cardSettings.visibleColumns.includes(col.id)}
+                  onChange={() => toggleColumnVisibility(col.id)}
+                  className="h-3.5 w-3.5 rounded border"
+                />
+                Show: {col.title}
+              </label>
+            ))}
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="mt-3 h-7 w-full text-xs"
+            onClick={() => setShowCardSettings(false)}
+          >
+            Done
+          </Button>
+        </div>
+      )}
+
       <DragDropContext onDragEnd={handleDragEnd}>
-        <div className="flex min-w-[940px] gap-3">
+        <div className="flex min-w-[940px] gap-3 pr-12">
           {orderedLanes.map((lane) => (
             <div key={lane.index} className="kanban-lane">
               <div className="kanban-lane-header">
@@ -3938,18 +4060,40 @@ function KanbanView({
                               onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelectItem(item.id); } }}
                             >
                               <p className="text-left text-sm font-medium">{item.icon ? `${item.icon} ` : ""}{item.name}</p>
-                              <p className="text-left text-[11px] text-muted-foreground">{item.groupName}</p>
+                              {cardSettings.showGroupName && (
+                                <p className="text-left text-[11px] text-muted-foreground">{item.groupName}</p>
+                              )}
+                              {cardSettings.visibleColumns.map((colId) => {
+                                const cv = item.columnValues.find((v) => v.column.id === colId);
+                                if (!cv || cv.value == null || cv.value === "") return null;
+                                const isDate = cv.column.columnType === "DATE" || cv.column.columnType === "TIMELINE";
+                                const displayValue = isDate
+                                  ? new Date(cv.value as string).toLocaleDateString()
+                                  : typeof cv.value === "number"
+                                    ? `${cv.column.title}: ${cv.value}`
+                                    : String(cv.value);
+                                return (
+                                  <p key={colId} className="text-left text-[11px] text-muted-foreground truncate">
+                                    {displayValue}
+                                  </p>
+                                );
+                              })}
                               <div className="mt-2 flex items-center justify-between">
-                                <div className="flex -space-x-1">
-                                  {item.assignees.slice(0, 3).map((assignee) => (
-                                    <Avatar key={assignee.user.id} className="h-5 w-5 border border-background">
-                                      <AvatarFallback className="text-[8px]">
-                                        {assignee.user.firstName[0]}
-                                        {assignee.user.lastName[0]}
-                                      </AvatarFallback>
-                                    </Avatar>
-                                  ))}
-                                </div>
+                                {cardSettings.showAssignees && (
+                                  <div className="flex -space-x-1">
+                                    {item.assignees.slice(0, 3).map((assignee) => (
+                                      <Avatar key={assignee.user.id} className="h-5 w-5 border border-background">
+                                        <AvatarFallback className="text-[8px]">
+                                          {assignee.user.firstName[0]}
+                                          {assignee.user.lastName[0]}
+                                        </AvatarFallback>
+                                      </Avatar>
+                                    ))}
+                                    {item.assignees.length === 0 && (
+                                      <span className="text-[10px] text-muted-foreground">Unassigned</span>
+                                    )}
+                                  </div>
+                                )}
                                 {statusValue && (
                                   <span
                                     onClick={(event) => {

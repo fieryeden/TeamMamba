@@ -227,19 +227,33 @@ export function WorkspaceClient({ workspace }: WorkspaceClientProps) {
             <Card className="hover:shadow-md transition-shadow cursor-pointer group border-l-4" style={{ borderLeftColor: board.color ?? workspaceColor }}>
               <CardHeader className="pb-2">
                 <div className="flex items-center justify-between">
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <FolderKanban className="h-4 w-4 text-mamba-500" />
-                    {board.name}
-                  </CardTitle>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="icon" className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <MoreHorizontal className="h-3 w-3" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onSelect={async (e) => {
-                        e.preventDefault();
+                  <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                    <span className="relative shrink-0" title="Change board color">
+                      <input
+                        type="color"
+                        value={board.color ?? workspaceColor}
+                        onChange={(e) => {
+                          const next = e.target.value;
+                          fetch(`/api/boards/${board.id}`, {
+                            method: "PATCH",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ color: next }),
+                          }).then((res) => {
+                            if (res.ok) setBoards((prev) => prev.map((b) => b.id === board.id ? { ...b, color: next } : b));
+                          });
+                        }}
+                        className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                      />
+                      <span className="block h-3.5 w-3.5 rounded-full border" style={{ backgroundColor: board.color ?? workspaceColor }} />
+                    </span>
+                    <CardTitle className="text-base truncate flex-1 min-w-0">
+                      {board.name}
+                    </CardTitle>
+                    <button
+                      type="button"
+                      className="shrink-0 rounded p-1 text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-accent hover:text-foreground transition-opacity"
+                      title="Rename board"
+                      onClick={async () => {
                         const newName = prompt("Rename board", board.name);
                         if (!newName || !newName.trim() || newName.trim() === board.name) return;
                         const res = await fetch(`/api/boards/${board.id}`, {
@@ -250,20 +264,27 @@ export function WorkspaceClient({ workspace }: WorkspaceClientProps) {
                         if (res.ok) {
                           setBoards((prev) => prev.map((b) => b.id === board.id ? { ...b, name: newName.trim() } : b));
                         }
-                      }}>
-                        <Edit2 className="h-3 w-3 mr-2" /> Rename
-                      </DropdownMenuItem>
+                      }}
+                    >
+                      <Edit2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="icon" className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <MoreHorizontal className="h-3 w-3" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
                       <DropdownMenuItem onSelect={() => {
-                        const color = prompt("Board color (hex)", "#579bfc");
+                        const color = prompt("Board color (hex)", board.color ?? workspaceColor);
                         if (!color) return;
                         fetch(`/api/boards/${board.id}`, {
                           method: "PATCH",
                           headers: { "Content-Type": "application/json" },
                           body: JSON.stringify({ color }),
                         }).then((res) => {
-                          if (res.ok) {
-                            setBoards((prev) => prev.map((b) => b.id === board.id ? { ...b, color } : b));
-                          }
+                          if (res.ok) setBoards((prev) => prev.map((b) => b.id === board.id ? { ...b, color } : b));
                         });
                       }}>
                         <Palette className="h-3 w-3 mr-2" /> Change Color
