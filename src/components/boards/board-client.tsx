@@ -53,6 +53,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn, formatRelativeTime } from "@/lib/utils";
 import { useBoardSocket } from "@/hooks/use-board-socket";
@@ -3793,6 +3796,97 @@ function ConnectCell({
   );
 }
 
+function PeopleDropdown({
+  item,
+  boardMembers,
+  allColumns,
+  onUpdateValue,
+  onSelectItem,
+}: {
+  item: Item & { groupName: string };
+  boardMembers: Array<{ user: { id: string; firstName: string; lastName: string; avatarUrl: string | null } }>;
+  allColumns: Column[];
+  onUpdateValue: (valueId: string, value: unknown) => void;
+  onSelectItem: (itemId: string) => void;
+}) {
+  const peopleCol = allColumns.find((c) => c.columnType === "PEOPLE");
+  const pcv = peopleCol ? item.columnValues.find((v) => v.column.id === peopleCol.id) : null;
+  const assignedUsers = (pcv?.value as Array<{ id: string; name: string }> | null) || [];
+  const assignedIds = new Set(assignedUsers.map((u) => u.id));
+
+  const displayText = assignedUsers.length > 0
+    ? assignedUsers.map((u) => u.name).join(", ")
+    : "Unassigned";
+
+  const handleToggleMember = (userId: string, userName: string) => {
+    if (!peopleCol) return;
+    let updated;
+    if (assignedIds.has(userId)) {
+      updated = assignedUsers.filter((u) => u.id !== userId);
+    } else {
+      updated = [...assignedUsers, { id: userId, name: userName }];
+    }
+    if (pcv) {
+      onUpdateValue(pcv.id, updated);
+    } else {
+      onUpdateValue(`create:${item.id}:${peopleCol.id}`, updated);
+    }
+  };
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1.5 rounded-md border border-input bg-background px-2 py-1 text-[11px] text-muted-foreground hover:border-mamba-300 hover:text-foreground transition-colors w-full"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <span className="truncate flex-1 text-left">{displayText}</span>
+          <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        className="w-56 p-1"
+        align="start"
+        side="bottom"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="space-y-0.5">
+          {boardMembers.map((member) => {
+            const isAssigned = assignedIds.has(member.user.id);
+            return (
+              <button
+                key={member.user.id}
+                type="button"
+                className={cn(
+                  "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs transition-colors",
+                  isAssigned
+                    ? "bg-mamba-50 text-mamba-700"
+                    : "hover:bg-accent hover:text-accent-foreground",
+                )}
+                onClick={() => {
+                  handleToggleMember(
+                    member.user.id,
+                    `${member.user.firstName} ${member.user.lastName}`,
+                  );
+                }}
+              >
+                <Avatar className="h-5 w-5">
+                  <AvatarFallback className="text-[8px]">
+                    {member.user.firstName[0]}{member.user.lastName[0]}
+                  </AvatarFallback>
+                </Avatar>
+                <span className="flex-1 text-left">{member.user.firstName} {member.user.lastName}</span>
+                {isAssigned && <Check className="h-3 w-3 text-mamba-600" />}
+              </button>
+            );
+          })}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 function KanbanView({
   groups,
   columns,
@@ -4089,50 +4183,13 @@ function KanbanView({
                               })}
                               <div className="mt-2">
                                 {cardSettings.showAssignees && boardMembers.length > 0 && (
-                                  <div className="flex flex-wrap gap-1">
-                                    {boardMembers.map((member) => {
-                                      const peopleCol = allColumns.find((c) => c.columnType === "PEOPLE");
-                                      const pcv = peopleCol ? item.columnValues.find((v) => v.column.id === peopleCol.id) : null;
-                                      const assignedUsers = (pcv?.value as Array<{id:string;name:string}> | null) || [];
-                                      const isAssigned = assignedUsers.some((u) => u.id === member.user.id);
-                                      return (
-                                        <button
-                                          key={member.user.id}
-                                          type="button"
-                                          title={`${member.user.firstName} ${member.user.lastName}`}
-                                          onClick={(event) => {
-                                            event.stopPropagation();
-                                            if (!peopleCol) return;
-                                            const currentVal = assignedUsers;
-                                            let updated;
-                                            if (isAssigned) {
-                                              updated = currentVal.filter((u) => u.id !== member.user.id);
-                                            } else {
-                                              updated = [...currentVal, { id: member.user.id, name: `${member.user.firstName} ${member.user.lastName}` }];
-                                            }
-                                            if (pcv) {
-                                              onUpdateValue(pcv.id, updated);
-                                            } else {
-                                              onUpdateValue(`create:${item.id}:${peopleCol.id}`, updated);
-                                            }
-                                          }}
-                                          className={cn(
-                                            "flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] transition-colors",
-                                            isAssigned
-                                              ? "border-mamba-400 bg-mamba-50 text-mamba-700 ring-1 ring-mamba-300"
-                                              : "border-muted bg-background text-muted-foreground hover:border-mamba-300 hover:bg-mamba-50/50",
-                                          )}
-                                        >
-                                          <Avatar className="h-4 w-4">
-                                            <AvatarFallback className="text-[7px]">
-                                              {member.user.firstName[0]}{member.user.lastName[0]}
-                                            </AvatarFallback>
-                                          </Avatar>
-                                          <span className="max-w-[60px] truncate">{member.user.firstName}</span>
-                                        </button>
-                                      );
-                                    })}
-                                  </div>
+                                  <PeopleDropdown
+                                    item={item}
+                                    boardMembers={boardMembers}
+                                    allColumns={allColumns}
+                                    onUpdateValue={onUpdateValue}
+                                    onSelectItem={onSelectItem}
+                                  />
                                 )}
                               </div>
                               <div className="mt-1 flex items-center justify-between">
