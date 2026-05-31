@@ -192,8 +192,8 @@ export async function chat(
   const effectiveKey = options.apiKey || "";
   const selected = options.provider
     ? options.provider === "openai"
-      ? { provider: "openai" as const, key: effectiveKey || process.env.OPENAI_API_KEY ?? "", model: OPENAI_MODEL }
-      : { provider: "anthropic" as const, key: effectiveKey || process.env.ANTHROPIC_API_KEY ?? "", model: ANTHROPIC_MODEL }
+      ? { provider: "openai" as const, key: effectiveKey || (process.env.OPENAI_API_KEY ?? ""), model: OPENAI_MODEL }
+      : { provider: "anthropic" as const, key: effectiveKey || (process.env.ANTHROPIC_API_KEY ?? ""), model: ANTHROPIC_MODEL }
     : effectiveKey
       ? { provider: "openai" as const, key: effectiveKey, model: OPENAI_MODEL }
       : envProvider;
@@ -418,8 +418,8 @@ export async function chatWithTools(
   const effectiveKey = options.apiKey || "";
   const selected = options.provider
     ? options.provider === "openai"
-      ? { provider: "openai" as const, key: effectiveKey || process.env.OPENAI_API_KEY ?? "", model: OPENAI_MODEL }
-      : { provider: "anthropic" as const, key: effectiveKey || process.env.ANTHROPIC_API_KEY ?? "", model: ANTHROPIC_MODEL }
+      ? { provider: "openai" as const, key: effectiveKey || (process.env.OPENAI_API_KEY ?? ""), model: OPENAI_MODEL }
+      : { provider: "anthropic" as const, key: effectiveKey || (process.env.ANTHROPIC_API_KEY ?? ""), model: ANTHROPIC_MODEL }
     : effectiveKey
       ? { provider: "openai" as const, key: effectiveKey, model: OPENAI_MODEL }
       : envProvider;

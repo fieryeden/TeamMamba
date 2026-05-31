@@ -117,7 +117,6 @@ export async function executeBoardTool(
           boardId: board.id,
           groupId: targetGroup.id,
           position: Date.now(),
-          creatorId: userId,
         },
       });
 

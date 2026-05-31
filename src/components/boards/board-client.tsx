@@ -2076,6 +2076,7 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
             boardId={board.id}
             groups={filteredGroups}
             columns={columns}
+            boardMembers={board.members}
             sortState={sortState}
             getSortedItems={getSortedItems}
             onSort={handleSort}
@@ -2242,6 +2243,7 @@ const [showEmailSettings, setShowEmailSettings] = useState(false);
         groupName={selectedItem ? groupById[selectedItem.groupId]?.name ?? "" : ""}
         columns={columns}
         allItems={allItems}
+        boardMembers={board.members}
         comments={
           selectedItem
             ? [...(selectedItem.comments ?? []), ...(localComments[selectedItem.id] ?? [])]
@@ -2621,6 +2623,7 @@ function TableView({
   boardId,
   groups,
   columns,
+  boardMembers,
   setColumns,
   sortState,
   getSortedItems,
@@ -2651,6 +2654,7 @@ function TableView({
   boardId: string;
   groups: Group[];
   columns: Column[];
+  boardMembers: Array<{ user: { id: string; firstName: string; lastName: string; avatarUrl: string | null } }>;
   sortState: SortState;
   getSortedItems: (items: Item[]) => Item[];
   onSort: (columnId: string) => void;
@@ -2851,6 +2855,7 @@ function TableView({
               group={group}
               columns={columns}
               sortedItems={getSortedItems(group.items)}
+              boardMembers={boardMembers}
               onCycleStatus={onCycleStatus}
               onUpdateValue={onUpdateValue}
               onUploadFile={onUploadFile}
@@ -2901,6 +2906,7 @@ function GroupRows({
   group,
   columns,
   sortedItems,
+  boardMembers,
   onCycleStatus,
   onUpdateValue,
   onUploadFile,
@@ -2925,6 +2931,7 @@ function GroupRows({
   group: Group;
   columns: Column[];
   sortedItems: Item[];
+  boardMembers: Array<{ user: { id: string; firstName: string; lastName: string; avatarUrl: string | null } }>;
   onCycleStatus: (itemId: string, cv: ColumnValue) => void;
   onUpdateValue: (valueId: string, value: unknown) => void;
   onUploadFile: (itemId: string, columnId: string, file: File) => void;
@@ -3146,6 +3153,8 @@ function GroupRows({
                         boardId={boardId}
                         item={item}
                         column={column}
+                        boardMembers={boardMembers}
+                        allColumns={columns}
                         onCycleStatus={onCycleStatus}
                         onUpdateValue={onUpdateValue}
                         onUploadFile={onUploadFile}
@@ -3264,6 +3273,8 @@ function CellRenderer({
   boardId,
   item,
   column,
+  boardMembers,
+  allColumns,
   onCycleStatus,
   onUpdateValue,
   onUploadFile,
@@ -3273,6 +3284,8 @@ function CellRenderer({
   boardId: string;
   item: Item;
   column: Column;
+  boardMembers: Array<{ user: { id: string; firstName: string; lastName: string; avatarUrl: string | null } }>;
+  allColumns: Column[];
   onCycleStatus: (itemId: string, cv: ColumnValue) => void;
   onUpdateValue: (valueId: string, value: unknown) => void;
   onUploadFile: (itemId: string, columnId: string, file: File) => void;
@@ -4413,6 +4426,7 @@ function ItemDetailPanel({
   groupName,
   columns,
   allItems,
+  boardMembers,
   comments,
   localActivities,
   onClose,
@@ -4431,6 +4445,7 @@ function ItemDetailPanel({
   groupName: string;
   columns: Column[];
   allItems: Item[];
+  boardMembers: Array<{ user: { id: string; firstName: string; lastName: string; avatarUrl: string | null } }>;
   comments: ItemComment[];
   localActivities: Array<{ id: string; text: string; createdAt: string }>;
   onClose: () => void;
@@ -4983,11 +4998,15 @@ function ItemDetailPanel({
                     </p>
                     <DetailValueEditor
                       itemId={item.id}
+                      item={item}
                       column={column}
                       cv={emptyCv}
                       isNew={!cv}
+                      boardMembers={boardMembers}
+                      allColumns={columns}
                       onUpdateValue={onUpdateValue}
                       onUploadFile={onUploadFile}
+                      onSelectItem={() => {}}
                     />
                   </div>
                 );
@@ -5277,18 +5296,26 @@ function BulkValueEditor({ column, selectedCount, onClose, onApply }: {
 
 function DetailValueEditor({
   itemId,
+  item,
   column,
   cv,
   isNew,
+  boardMembers,
+  allColumns,
   onUpdateValue,
   onUploadFile,
+  onSelectItem,
 }: {
   itemId: string;
+  item: Item;
   column: Column;
   cv: ColumnValue;
   isNew?: boolean;
+  boardMembers: Array<{ user: { id: string; firstName: string; lastName: string; avatarUrl: string | null } }>;
+  allColumns: Column[];
   onUpdateValue: (valueId: string, value: unknown) => void;
   onUploadFile: (itemId: string, columnId: string, file: File) => void;
+  onSelectItem: (itemId: string) => void;
 }) {
   const handleChange = (value: unknown) => {
     if (isNew && value != null) {
@@ -5366,43 +5393,14 @@ function DetailValueEditor({
   }
 
   if (column.columnType === "PEOPLE") {
-    const assignedUsers = Array.isArray(cv.value) ? cv.value as Array<{ id: string; name: string; avatarUrl?: string }> : [];
     return (
-      <div className="space-y-2">
-        {assignedUsers.length > 0 && (
-          <div className="flex flex-wrap gap-1">
-            {assignedUsers.map((u, idx) => (
-              <span key={u.id ?? idx} className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-xs text-blue-700">
-                {u.avatarUrl && <img src={u.avatarUrl} alt="" className="h-4 w-4 rounded-full" />}
-                {u.name}
-                <button
-                  type="button"
-                  className="ml-0.5 text-blue-400 hover:text-blue-600"
-                  onClick={() => {
-                    const updated = assignedUsers.filter((_, i) => i !== idx);
-                    onUpdateValue(cv.id, updated);
-                  }}
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
-        <Input
-          placeholder="Type a name and press Enter to assign"
-          className="h-8 text-xs"
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              const name = event.currentTarget.value.trim();
-              if (!name) return;
-              const newAssigned = [...assignedUsers, { id: `user-${Date.now()}`, name }];
-              onUpdateValue(cv.id, newAssigned);
-              event.currentTarget.value = "";
-            }
-          }}
-        />
-      </div>
+      <PeopleDropdown
+        item={{ ...item, groupName: "" }}
+        boardMembers={boardMembers}
+        allColumns={allColumns}
+        onUpdateValue={onUpdateValue}
+        onSelectItem={onSelectItem}
+      />
     );
   }
 
