@@ -50,7 +50,11 @@ export function AIPanel({ boardId, itemId, onClose }: AIPanelProps) {
   const [llmConfigured, setLlmConfigured] = useState(false);
   const [aiProvider, setAiProvider] = useState<string>("auto");
   const [aiModel, setAiModel] = useState<string>("");
+  const [aiBaseUrl, setAiBaseUrl] = useState<string>("");
+  const [aiApiKey, setAiApiKey] = useState<string>("");
   const [showModelSettings, setShowModelSettings] = useState(false);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsSaved, setSettingsSaved] = useState(false);
   const [boardItems, setBoardItems] = useState<Array<{ id: string; name: string }>>([]);
   const [itemsLoading, setItemsLoading] = useState(false);
   const [statusLoading, setStatusLoading] = useState(true);
@@ -69,6 +73,8 @@ export function AIPanel({ boardId, itemId, onClose }: AIPanelProps) {
         setLlmConfigured(Boolean(data.configured));
         if (data.provider) setAiProvider(data.provider);
         if (data.model) setAiModel(data.model);
+        if (data.baseUrl) setAiBaseUrl(data.baseUrl);
+        if (data.hasApiKey) setAiApiKey("••••••••");
       } catch {
         setLlmConfigured(false);
       } finally {
@@ -116,6 +122,8 @@ export function AIPanel({ boardId, itemId, onClose }: AIPanelProps) {
           action: suggestAction,
           provider: aiProvider !== "auto" ? aiProvider : undefined,
           model: aiModel || undefined,
+          baseUrl: aiBaseUrl || undefined,
+          apiKey: aiApiKey || undefined,
         }),
       });
       const data = await res.json();
@@ -136,7 +144,7 @@ export function AIPanel({ boardId, itemId, onClose }: AIPanelProps) {
       const res = await fetch("/api/ai/generate-items", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ boardId, description: genDescription, provider: aiProvider !== "auto" ? aiProvider : undefined, model: aiModel || undefined }),
+        body: JSON.stringify({ boardId, description: genDescription, provider: aiProvider !== "auto" ? aiProvider : undefined, model: aiModel || undefined, baseUrl: aiBaseUrl || undefined, apiKey: aiApiKey || undefined }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed");
@@ -156,7 +164,7 @@ export function AIPanel({ boardId, itemId, onClose }: AIPanelProps) {
       const res = await fetch("/api/ai/summarize-board", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ boardId, provider: aiProvider !== "auto" ? aiProvider : undefined, model: aiModel || undefined }),
+        body: JSON.stringify({ boardId, provider: aiProvider !== "auto" ? aiProvider : undefined, model: aiModel || undefined, baseUrl: aiBaseUrl || undefined, apiKey: aiApiKey || undefined }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed");
@@ -193,6 +201,8 @@ export function AIPanel({ boardId, itemId, onClose }: AIPanelProps) {
           conversationHistory: payloadHistory,
           provider: aiProvider !== "auto" ? aiProvider : undefined,
           model: aiModel || undefined,
+          baseUrl: aiBaseUrl || undefined,
+          apiKey: aiApiKey || undefined,
         }),
       });
       const data = await res.json();
@@ -261,7 +271,7 @@ export function AIPanel({ boardId, itemId, onClose }: AIPanelProps) {
       </div>
 
       {showModelSettings && (
-        <div className="border-b px-4 py-2 space-y-2">
+        <div className="border-b px-4 py-3 space-y-2">
           <p className="text-[10px] font-medium text-muted-foreground">AI Provider & Model</p>
           <select
             value={aiProvider}
@@ -278,8 +288,54 @@ export function AIPanel({ boardId, itemId, onClose }: AIPanelProps) {
             onChange={(e) => setAiModel(e.target.value)}
             className="h-8 text-xs"
           />
+          <Input
+            placeholder="Base URL (e.g. https://api.openai.com/v1)"
+            value={aiBaseUrl}
+            onChange={(e) => setAiBaseUrl(e.target.value)}
+            className="h-8 text-xs"
+          />
+          <Input
+            type="password"
+            placeholder="API Key"
+            value={aiApiKey}
+            onChange={(e) => setAiApiKey(e.target.value)}
+            className="h-8 text-xs"
+          />
+          <Button
+            size="sm"
+            className="h-7 w-full text-xs bg-mamba-600 hover:bg-mamba-700"
+            disabled={settingsSaving}
+            onClick={async () => {
+              setSettingsSaving(true);
+              setSettingsSaved(false);
+              try {
+                const res = await fetch("/api/ai/config", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    provider: aiProvider,
+                    model: aiModel,
+                    baseUrl: aiBaseUrl,
+                    apiKey: aiApiKey,
+                  }),
+                });
+                if (res.ok) {
+                  setSettingsSaved(true);
+                  setLlmConfigured(true);
+                  setTimeout(() => setSettingsSaved(false), 2000);
+                }
+              } catch {
+                // ignore
+              } finally {
+                setSettingsSaving(false);
+              }
+            }}
+          >
+            {settingsSaving ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
+            {settingsSaved ? "✓ Saved" : "Save Settings"}
+          </Button>
           <p className="text-[10px] text-muted-foreground">
-            Leave model empty to use default. Provider must match an API key in your .env.
+            Leave empty to use .env config. Custom base URL enables local/proxy endpoints (e.g. Ollama, LM Studio).
           </p>
         </div>
       )}

@@ -7,6 +7,8 @@ export interface LLMChatOptions {
   temperature?: number;
   maxOutputTokens?: number;
   maxInputTokens?: number;
+  baseUrl?: string;
+  apiKey?: string;
 }
 
 export interface LLMChatResult {
@@ -89,7 +91,8 @@ async function callOpenAI(
   userPrompt: string,
   options: LLMChatOptions
 ): Promise<string> {
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+  const base = (options.baseUrl || "https://api.openai.com/v1").replace(/\/+$/, "");
+  const response = await fetch(`${base}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -129,7 +132,8 @@ async function callAnthropic(
   userPrompt: string,
   options: LLMChatOptions
 ): Promise<string> {
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
+  const base = (options.baseUrl || "https://api.anthropic.com/v1").replace(/\/+$/, "");
+  const response = await fetch(`${base}/messages`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -185,14 +189,17 @@ export async function chat(
   options: LLMChatOptions = {}
 ): Promise<LLMChatResult> {
   const envProvider = getProvider();
+  const effectiveKey = options.apiKey || "";
   const selected = options.provider
     ? options.provider === "openai"
-      ? { provider: "openai" as const, key: process.env.OPENAI_API_KEY ?? "", model: OPENAI_MODEL }
-      : { provider: "anthropic" as const, key: process.env.ANTHROPIC_API_KEY ?? "", model: ANTHROPIC_MODEL }
-    : envProvider;
+      ? { provider: "openai" as const, key: effectiveKey || process.env.OPENAI_API_KEY ?? "", model: OPENAI_MODEL }
+      : { provider: "anthropic" as const, key: effectiveKey || process.env.ANTHROPIC_API_KEY ?? "", model: ANTHROPIC_MODEL }
+    : effectiveKey
+      ? { provider: "openai" as const, key: effectiveKey, model: OPENAI_MODEL }
+      : envProvider;
   const prompt = truncatePrompt(systemPrompt, userPrompt, options.maxInputTokens ?? 9000);
 
-  if (selected.provider === "none") {
+  if (selected.provider === "none" && !effectiveKey) {
     return {
       text: "",
       provider: "none",
@@ -247,6 +254,207 @@ export async function chatJSON<T>(
   } catch (error) {
     throw new Error(`Failed to parse LLM JSON response: ${(error as Error).message}`);
   }
+}
+
+// ─── Tool / Function Calling Support ──────────────────────────
+
+export interface LLMTool {
+  name: string;
+  description: string;
+  parameters: {
+    type: "object";
+    properties: Record<string, { type: string; description: string; enum?: string[] }>;
+    required?: string[];
+  };
+}
+
+export interface LLMToolCall {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
+export interface ChatWithToolsResult {
+  text: string;
+  provider: string;
+  model: string;
+  fallback: boolean;
+  toolCalls: LLMToolCall[];
+  truncated: boolean;
+  promptTokensEstimate: number;
+  completionTokensEstimate: number;
+}
+
+async function callOpenAITools(
+  key: string,
+  model: string,
+  systemPrompt: string,
+  userPrompt: string,
+  tools: LLMTool[],
+  options: LLMChatOptions,
+): Promise<{ text: string; toolCalls: LLMToolCall[] }> {
+  const base = (options.baseUrl || "https://api.openai.com/v1").replace(/\/+$/, "");
+  const response = await fetch(`${base}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${key}`,
+    },
+    body: JSON.stringify({
+      model,
+      temperature: options.temperature ?? 0.2,
+      max_tokens: options.maxOutputTokens ?? 800,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      tools: tools.map((t) => ({
+        type: "function",
+        function: {
+          name: t.name,
+          description: t.description,
+          parameters: t.parameters,
+        },
+      })),
+      tool_choice: "auto",
+    }),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`OpenAI tools request failed (${response.status}): ${errorBody}`);
+  }
+
+  const payload = (await response.json()) as {
+    choices?: Array<{
+      message?: {
+        content?: string | null;
+        tool_calls?: Array<{
+          id: string;
+          function: { name: string; arguments: string };
+        }>;
+      };
+    }>;
+  };
+
+  const msg = payload.choices?.[0]?.message;
+  const text = msg?.content || "";
+  const toolCalls: LLMToolCall[] = (msg?.tool_calls || []).map((tc) => ({
+    id: tc.id,
+    name: tc.function.name,
+    arguments: JSON.parse(tc.function.arguments) as Record<string, unknown>,
+  }));
+
+  return { text, toolCalls };
+}
+
+async function callAnthropicTools(
+  key: string,
+  model: string,
+  systemPrompt: string,
+  userPrompt: string,
+  tools: LLMTool[],
+  options: LLMChatOptions,
+): Promise<{ text: string; toolCalls: LLMToolCall[] }> {
+  const base = (options.baseUrl || "https://api.anthropic.com/v1").replace(/\/+$/, "");
+  const response = await fetch(`${base}/messages`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": key,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model,
+      system: systemPrompt,
+      max_tokens: options.maxOutputTokens ?? 800,
+      temperature: options.temperature ?? 0.2,
+      tools: tools.map((t) => ({
+        name: t.name,
+        description: t.description,
+        input_schema: t.parameters,
+      })),
+      messages: [{ role: "user", content: userPrompt }],
+    }),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`Anthropic tools request failed (${response.status}): ${errorBody}`);
+  }
+
+  const payload = (await response.json()) as {
+    content?: Array<
+      | { type: "text"; text: string }
+      | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
+    >;
+  };
+
+  const textParts: string[] = [];
+  const toolCalls: LLMToolCall[] = [];
+
+  for (const block of payload.content || []) {
+    if (block.type === "text") {
+      textParts.push(block.text);
+    } else if (block.type === "tool_use") {
+      toolCalls.push({
+        id: block.id,
+        name: block.name,
+        arguments: block.input,
+      });
+    }
+  }
+
+  return { text: textParts.join("\n"), toolCalls };
+}
+
+export async function chatWithTools(
+  systemPrompt: string,
+  userPrompt: string,
+  tools: LLMTool[],
+  options: LLMChatOptions = {},
+): Promise<ChatWithToolsResult> {
+  const envProvider = getProvider();
+  const effectiveKey = options.apiKey || "";
+  const selected = options.provider
+    ? options.provider === "openai"
+      ? { provider: "openai" as const, key: effectiveKey || process.env.OPENAI_API_KEY ?? "", model: OPENAI_MODEL }
+      : { provider: "anthropic" as const, key: effectiveKey || process.env.ANTHROPIC_API_KEY ?? "", model: ANTHROPIC_MODEL }
+    : effectiveKey
+      ? { provider: "openai" as const, key: effectiveKey, model: OPENAI_MODEL }
+      : envProvider;
+  const prompt = truncatePrompt(systemPrompt, userPrompt, options.maxInputTokens ?? 9000);
+
+  if (selected.provider === "none" && !effectiveKey) {
+    return {
+      text: "",
+      provider: "none",
+      model: "none",
+      fallback: true,
+      toolCalls: [],
+      truncated: prompt.truncated,
+      promptTokensEstimate: prompt.promptTokens,
+      completionTokensEstimate: 0,
+    };
+  }
+
+  const { text, toolCalls } = await callWithRetry(() => {
+    if (selected.provider === "openai") {
+      return callOpenAITools(selected.key, options.model ?? selected.model, prompt.systemPrompt, prompt.userPrompt, tools, options);
+    }
+    return callAnthropicTools(selected.key, options.model ?? selected.model, prompt.systemPrompt, prompt.userPrompt, tools, options);
+  });
+
+  return {
+    text,
+    provider: selected.provider,
+    model: options.model ?? selected.model,
+    fallback: false,
+    toolCalls,
+    truncated: prompt.truncated,
+    promptTokensEstimate: prompt.promptTokens,
+    completionTokensEstimate: estimateTokens(text),
+  };
 }
 
 export function isLLMConfigured(): boolean {

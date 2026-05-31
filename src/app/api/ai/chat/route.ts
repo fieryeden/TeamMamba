@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getAuthUser } from "@/lib/session";
-import { chat, isLLMConfigured } from "@/lib/llm";
+import { chatWithTools, isLLMConfigured, type LLMTool, type LLMToolCall } from "@/lib/llm";
+import { getAIConfig, type AIConfig } from "@/lib/ai-config";
+import { executeBoardTool, getBoardTools } from "@/lib/ai-tools";
 import {
   buildBoardContext,
   computeBoardMetrics,
@@ -23,7 +25,16 @@ export async function GET() {
   try {
     const user = await getAuthUser();
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    return NextResponse.json({ configured: isLLMConfigured() });
+    const dbConfig = await getAIConfig(user.id);
+    const envConfigured = isLLMConfigured();
+    const hasDbKey = Boolean(dbConfig?.apiKey);
+    return NextResponse.json({
+      configured: envConfigured || hasDbKey,
+      provider: dbConfig?.provider ?? null,
+      model: dbConfig?.model ?? null,
+      baseUrl: dbConfig?.baseUrl ?? null,
+      hasApiKey: hasDbKey,
+    });
   } catch (err) {
     console.error("AI chat status error:", err);
     return NextResponse.json({ configured: false });
@@ -36,12 +47,14 @@ export async function POST(req: NextRequest) {
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const body = await req.json();
-    const { boardId, message, conversationHistory, provider, model } = body as {
+    const { boardId, message, conversationHistory, provider, model, baseUrl, apiKey } = body as {
       boardId?: string;
       message?: string;
       conversationHistory?: ChatMessage[];
       provider?: string;
       model?: string;
+      baseUrl?: string;
+      apiKey?: string;
     };
 
     if (!boardId || !message?.trim()) {
@@ -74,9 +87,17 @@ export async function POST(req: NextRequest) {
     const boardShape = board as unknown as BoardShape;
     const metrics = computeBoardMetrics(boardShape);
 
-    if (!isLLMConfigured()) {
+    const dbConfig = await getAIConfig(user.id);
+    const effectiveConfig: AIConfig = {
+      provider: (provider || dbConfig?.provider || undefined) as AIConfig["provider"],
+      model: model || dbConfig?.model || undefined,
+      baseUrl: baseUrl || dbConfig?.baseUrl || undefined,
+      apiKey: apiKey || dbConfig?.apiKey || undefined,
+    };
+    const hasConfig = Boolean(effectiveConfig.apiKey || isLLMConfigured());
+    if (!hasConfig) {
       return NextResponse.json({
-        response: "AI chat requires an OpenAI or Anthropic API key. Configure one in your environment to enable conversational responses.",
+        response: "AI chat requires an OpenAI or Anthropic API key. Configure one in the AI settings panel or your .env.",
         suggestions: ["Configure OPENAI_API_KEY or ANTHROPIC_API_KEY", "Try AI summarize for heuristic insights"],
         provider: "none",
         fallback: true,
@@ -86,21 +107,29 @@ export async function POST(req: NextRequest) {
     const context = buildBoardContext(boardShape);
     const historyText = Array.isArray(conversationHistory) ? formatConversation(conversationHistory) : "";
 
+    // Build tool definitions from board schema
+    const tools: LLMTool[] = getBoardTools(board);
+
+    const systemPrompt = `You are TeamMamba AI assistant. You can manage this board by using available tools.
+Board context:
+${context.summary}
+
+Use tools when the user asks you to create, modify, assign, or move items. Answer directly for questions about board status.`;
+
+    const userContent = [
+      historyText ? `Conversation history:\n${historyText}` : "",
+      `User message: ${message.trim()}`,
+    ].filter(Boolean).join("\n\n");
+
     try {
-      const llm = await chat(
-        "You are TeamMamba AI assistant. Answer based on board context, keep replies practical and concise.",
-        [
-          `Board context:\n${context.summary}`,
-          historyText ? `Conversation history:\n${historyText}` : "",
-          `User message: ${message.trim()}`,
-          "If useful, include up to 3 actionable follow-up suggestions as plain lines prefixed with 'Suggestion:'.",
-        ]
-          .filter(Boolean)
-          .join("\n\n"),
-        { temperature: 0.3, maxOutputTokens: 550, model: model, provider: provider as any }
+      const llm = await chatWithTools(
+        systemPrompt,
+        userContent,
+        tools,
+        { temperature: 0.3, maxOutputTokens: 800, model: effectiveConfig.model, provider: effectiveConfig.provider, baseUrl: effectiveConfig.baseUrl, apiKey: effectiveConfig.apiKey }
       );
 
-      if (llm.fallback || !llm.text.trim()) {
+      if (llm.fallback || (!llm.text.trim() && llm.toolCalls.length === 0)) {
         const fallback = heuristicChatResponse(message, boardShape, metrics);
         return NextResponse.json({
           response: fallback.answer,
@@ -110,26 +139,26 @@ export async function POST(req: NextRequest) {
         });
       }
 
-      const lines = llm.text
-        .trim()
-        .split("\n")
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0);
+      // Execute any tool calls
+      const toolResults: Array<{ tool: string; result: Record<string, unknown> }> = [];
+      for (const tc of llm.toolCalls) {
+        const result = await executeBoardTool(tc, board, user.id);
+        toolResults.push({ tool: tc.name, result });
+      }
 
-      const suggestions = lines
-        .filter((line) => line.toLowerCase().startsWith("suggestion:"))
-        .map((line) => line.replace(/^suggestion:\s*/i, "").trim())
-        .filter((line) => line.length > 0)
-        .slice(0, 3);
-
-      const response = lines
-        .filter((line) => !line.toLowerCase().startsWith("suggestion:"))
-        .join(" ")
-        .trim();
+      // Build response text
+      let responseText = llm.text.trim();
+      if (toolResults.length > 0 && !responseText) {
+        const summaries = toolResults.map((tr) => {
+          if (tr.result.success) return `✓ ${tr.tool}: ${tr.result.message || "Done"}`;
+          return `✗ ${tr.tool}: ${tr.result.error || "Failed"}`;
+        });
+        responseText = summaries.join("\n");
+      }
 
       return NextResponse.json({
-        response: response || llm.text.trim(),
-        suggestions: suggestions.length > 0 ? suggestions : undefined,
+        response: responseText,
+        toolResults,
         provider: llm.provider,
         fallback: false,
       });
