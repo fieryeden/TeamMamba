@@ -3393,21 +3393,14 @@ function CellRenderer({
   }
 
   if (column.columnType === "PEOPLE") {
-    if (!item.assignees.length) {
-      return <span className="text-xs text-muted-foreground">Unassigned</span>;
-    }
-
     return (
-      <div className="flex -space-x-1">
-        {item.assignees.map((assignee) => (
-          <Avatar key={assignee.user.id} className="h-6 w-6 border-2 border-background">
-            <AvatarFallback className="bg-mamba-100 text-[10px] text-mamba-700">
-              {assignee.user.firstName[0]}
-              {assignee.user.lastName[0]}
-            </AvatarFallback>
-          </Avatar>
-        ))}
-      </div>
+      <PeopleDropdown
+        item={{ ...item, groupName: "" }}
+        boardMembers={boardMembers}
+        allColumns={allColumns}
+        onUpdateValue={onUpdateValue}
+        onSelectItem={onSelectItem}
+      />
     );
   }
 
